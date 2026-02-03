@@ -11,9 +11,11 @@ body{
 header{
   padding:14px 16px 10px;
   border-bottom:1px solid #1a2330;
-  position:relative;   /* was: sticky */
-  top:auto;            /* was: 0 */
-  background:#0b0f14;  /* remove the blur overlay look */
+
+  position:relative;   /* ✅ not sticky anymore */
+  top:auto;
+
+  background:#0b0f14;  /* ✅ solid background */
   backdrop-filter:none;
   z-index:1;
 }
