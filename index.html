@@ -9,27 +9,84 @@
 <body>
   <header>
     <h1>2-Organism Ecosystem</h1>
+
     <div class="row">
       <button id="pauseBtn">Pause</button>
       <button id="resetBtn">Reset</button>
+      <button id="resetViewBtn">Reset View</button>
+
       <label class="chk">
         <input type="checkbox" id="drawTrails" checked />
         Trails
       </label>
+
       <label class="chk">
         <input type="checkbox" id="drawHeat" />
         Plant Heatmap
       </label>
+
+      <label class="chk">
+        <input type="checkbox" id="autosave" checked />
+        Autosave settings
+      </label>
     </div>
+
+    <div class="controls">
+      <div class="ctl">
+        <div class="ctlTop">
+          <span>Sim speed</span>
+          <span class="val" id="v_tickEvery">2</span>
+        </div>
+        <input id="tickEvery" type="range" min="1" max="10" step="1" />
+        <div class="hint">Higher = slower (runs 1 tick every N frames)</div>
+      </div>
+
+      <div class="ctl">
+        <div class="ctlTop">
+          <span>Plant growth</span>
+          <span class="val" id="v_plantGrowth">0.006</span>
+        </div>
+        <input id="plantGrowth" type="range" min="0.001" max="0.03" step="0.001" />
+      </div>
+
+      <div class="ctl">
+        <div class="ctlTop">
+          <span>Mutation rate</span>
+          <span class="val" id="v_mutRate">0.10</span>
+        </div>
+        <input id="mutRate" type="range" min="0.00" max="0.30" step="0.01" />
+      </div>
+
+      <div class="ctl">
+        <div class="ctlTop">
+          <span>Mutation strength</span>
+          <span class="val" id="v_mutStrength">0.10</span>
+        </div>
+        <input id="mutStrength" type="range" min="0.00" max="0.30" step="0.01" />
+      </div>
+
+      <div class="ctl">
+        <div class="ctlTop">
+          <span>Speciation</span>
+          <span class="val" id="v_speciesSplit">0.30</span>
+        </div>
+        <input id="speciesSplit" type="range" min="0.15" max="0.60" step="0.01" />
+        <div class="hint">Lower = more new species</div>
+      </div>
+    </div>
+
     <div id="stats"></div>
   </header>
 
   <main>
     <canvas id="c"></canvas>
+    <div class="zoomHint">
+      Wheel = zoom • Drag = pan • Double-click = reset view
+    </div>
   </main>
 
   <footer>
-    Tip: let it run 2–5 minutes. Then tweak constants in <code>sim.js</code> (mutation, plant growth, vision).
+    Settings save in your browser automatically when Autosave is on.
   </footer>
 
   <script src="sim.js"></script>
