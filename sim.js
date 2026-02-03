@@ -1,21 +1,18 @@
-// Ecosystem sim (browser-only, GitHub Pages friendly)
-// + Legend panel w/ click-to-follow species
-// + Species labels (only at high zoom)
-// + Autosave WORLD state + “offline fast-forward” on reopen
-//
-// Note: A GitHub Pages site cannot truly run while closed.
-// This saves state + simulates elapsed time when you reopen.
+// 2-Organism Ecosystem (browser + GitHub Pages friendly)
+// - Plants -> Grazers -> Hunters
+// - Size gene + speciation + colored species
+// - Legend panel (click to follow species)
+// - Labels only when zoomed in
+// - Save slots (1/2/3) + Export/Import world JSON
 
+// ---------- DOM ----------
 const canvas = document.getElementById("c");
 const ctx = canvas.getContext("2d", { alpha: false });
 
-// UI
 const statsEl = document.getElementById("stats");
 const pauseBtn = document.getElementById("pauseBtn");
 const resetBtn = document.getElementById("resetBtn");
 const resetViewBtn = document.getElementById("resetViewBtn");
-const unfollowBtn = document.getElementById("unfollowBtn");
-const clearSaveBtn = document.getElementById("clearSaveBtn");
 
 const drawTrailsEl = document.getElementById("drawTrails");
 const drawHeatEl = document.getElementById("drawHeat");
@@ -34,11 +31,17 @@ const v_mutRate = document.getElementById("v_mutRate");
 const v_mutStrength = document.getElementById("v_mutStrength");
 const v_speciesSplit = document.getElementById("v_speciesSplit");
 
+const slotSelect = document.getElementById("slotSelect");
+const exportBtn = document.getElementById("exportBtn");
+const importFile = document.getElementById("importFile");
+const clearSlotBtn = document.getElementById("clearSlotBtn");
+
 const legendListEl = document.getElementById("legendList");
 const tabG = document.getElementById("tabG");
 const tabH = document.getElementById("tabH");
+const unfollowBtn = document.getElementById("unfollowBtn");
 
-// Canvas sizing
+// ---------- Canvas fit ----------
 function fitCanvas() {
   const rect = canvas.getBoundingClientRect();
   const dpr = Math.max(1, Math.floor(window.devicePixelRatio || 1));
@@ -52,7 +55,7 @@ fitCanvas();
 const W = () => canvas.getBoundingClientRect().width;
 const H = () => canvas.getBoundingClientRect().height;
 
-// Utils
+// ---------- Utils ----------
 const rand = (a = 1, b = 0) => Math.random() * (a - b) + b;
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 const dist2 = (ax, ay, bx, by) => (ax - bx) ** 2 + (ay - by) ** 2;
@@ -63,11 +66,9 @@ function wrapPos(o) {
   if (o.y < 0) o.y += h; else if (o.y > h) o.y -= h;
 }
 
-// =======================
-// SETTINGS SAVE (SLIDERS)
-// =======================
-const SETTINGS_KEY = "ecosim_settings_v2";
-const WORLD_KEY = "ecosim_world_v2";
+// ---------- Settings ----------
+const SETTINGS_KEY = "ecosim_settings_v3";
+const WORLD_KEY_BASE = "ecosim_world_v3_slot_"; // + slot number
 
 const defaults = {
   tickEvery: 2,
@@ -87,7 +88,6 @@ function loadSettings() {
     settings = { ...defaults, ...JSON.parse(raw) };
   } catch {}
 }
-
 function saveSettings() {
   if (!autosaveEl.checked) return;
   try {
@@ -101,7 +101,6 @@ function saveSettings() {
     }));
   } catch {}
 }
-
 function syncUIFromSettings() {
   tickEveryEl.value = String(settings.tickEvery);
   plantGrowthEl.value = String(settings.plantGrowth);
@@ -116,12 +115,8 @@ function syncUIFromSettings() {
   v_mutStrength.textContent = settings.mutStrength.toFixed(2);
   v_speciesSplit.textContent = settings.speciesSplit.toFixed(2);
 }
-
 function bindSettingHandlers() {
-  autosaveEl.addEventListener("change", () => {
-    settings.autosave = autosaveEl.checked;
-    saveSettings();
-  });
+  autosaveEl.addEventListener("change", () => { settings.autosave = autosaveEl.checked; saveSettings(); });
 
   tickEveryEl.addEventListener("input", () => {
     settings.tickEvery = parseInt(tickEveryEl.value, 10);
@@ -154,9 +149,19 @@ loadSettings();
 syncUIFromSettings();
 bindSettingHandlers();
 
-// =======================
-// CAMERA (infinite zoom/pan)
-// =======================
+// ---------- Save slot ----------
+let currentSlot = 1;
+function worldKey() { return WORLD_KEY_BASE + currentSlot; }
+function setSlot(n) {
+  currentSlot = n;
+  // Try load; if missing, create fresh
+  if (!loadWorldFromSlot()) resetWorldFresh();
+  renderLegend();
+  saveWorldToSlot(); // create slot if it didn't exist
+}
+slotSelect.addEventListener("change", () => setSlot(parseInt(slotSelect.value, 10)));
+
+// ---------- Camera (zoom/pan) ----------
 const cam = { x: 0, y: 0, scale: 1.0 };
 function resetView() {
   cam.x = W() / 2;
@@ -171,7 +176,6 @@ function screenToWorld(sx, sy) {
   return { x: cam.x + (sx - cx) / cam.scale, y: cam.y + (sy - cy) / cam.scale };
 }
 
-// wheel zoom at mouse
 canvas.addEventListener("wheel", (e) => {
   e.preventDefault();
   const rect = canvas.getBoundingClientRect();
@@ -187,7 +191,6 @@ canvas.addEventListener("wheel", (e) => {
   cam.y += (before.y - after.y);
 }, { passive: false });
 
-// drag pan
 let dragging = false, lastX = 0, lastY = 0;
 canvas.addEventListener("mousedown", (e) => { dragging = true; lastX = e.clientX; lastY = e.clientY; });
 window.addEventListener("mouseup", () => dragging = false);
@@ -200,13 +203,10 @@ window.addEventListener("mousemove", (e) => {
   cam.y -= dy / cam.scale;
 });
 
-// =======================
-// WORLD: plants
-// =======================
+// ---------- World: Plants ----------
 const GRID = 120;
 const PLANT_MAX = 1.0;
 const PLANT_EAT_RATE = 0.08;
-
 let plant = new Float32Array(GRID * GRID);
 const idx = (ix, iy) => iy * GRID + ix;
 
@@ -223,38 +223,34 @@ function samplePlant(x, y) {
   const cd = c + (d - c) * tx;
   return ab + (cd - ab) * ty;
 }
-
 function addPlant(x, y, amount) {
   const w = W(), h = H();
-  const ix = clamp(Math.floor((x / w) * GRID), 0, GRID - 1);
-  const iy = clamp(Math.floor((y / h) * GRID), 0, GRID - 1);
-  const k = idx(ix, iy);
+  const ix0 = clamp(Math.floor((x / w) * GRID), 0, GRID - 1);
+  const iy0 = clamp(Math.floor((y / h) * GRID), 0, GRID - 1);
+  const k = idx(ix0, iy0);
   plant[k] = clamp(plant[k] + amount, 0, PLANT_MAX);
 }
-
 function eatPlantAt(x, y, amount) {
   const w = W(), h = H();
-  const ix = clamp(Math.floor((x / w) * GRID), 0, GRID - 1);
-  const iy = clamp(Math.floor((y / h) * GRID), 0, GRID - 1);
-  const k = idx(ix, iy);
+  const ix0 = clamp(Math.floor((x / w) * GRID), 0, GRID - 1);
+  const iy0 = clamp(Math.floor((y / h) * GRID), 0, GRID - 1);
+  const k = idx(ix0, iy0);
   const take = Math.min(plant[k], amount);
   plant[k] -= take;
   return take;
 }
-
 function regenPlants() {
   const g = settings.plantGrowth;
-  for (let i = 0; i < plant.length; i++) plant[i] = clamp(plant[i] + g * (1 - plant[i]), 0, PLANT_MAX);
+  for (let i = 0; i < plant.length; i++) {
+    plant[i] = clamp(plant[i] + g * (1 - plant[i]), 0, PLANT_MAX);
+  }
 }
-
 function resetPlants() {
   plant.fill(0);
   for (let i = 0; i < 350; i++) addPlant(rand(W()), rand(H()), rand(0.8, 0.15));
 }
 
-// =======================
-// WORLD: sim constants
-// =======================
+// ---------- Sim constants ----------
 const REPRO_THRESHOLD = 1.35;
 const REPRO_COST = 0.70;
 const REPRO_COOLDOWN_TICKS = 900;
@@ -270,11 +266,11 @@ const HUNTER_VISION = 34;
 const EAT_RADIUS_BASE = 6.5;
 const HUNT_DAMAGE = 0.28;
 
-const TARGET_GRAZERS = 120;
-const TARGET_HUNTERS = 55;
-
 const START_GRAZERS = 1;
 const START_HUNTERS = 1;
+
+const TARGET_GRAZERS = 120;
+const TARGET_HUNTERS = 55;
 
 function sigmoid01(x) { return 1 / (1 + Math.exp(-x)); }
 function densityPressure() {
@@ -286,11 +282,9 @@ function densityPressure() {
 const localPlantOk = (x, y) => samplePlant(x, y) > 0.20;
 const preyAbundant = () => grazers.length > Math.max(18, hunters.length * 1.6);
 
-// =======================
-// SPECIES
-// =======================
+// ---------- Species ----------
 let nextSpeciesId = 1;
-const speciesDB = new Map(); // id -> {id,type,name,color,count,centroid,createdTick}
+const speciesDB = new Map();
 
 const syllA = ["ka","zu","mi","ra","to","shi","na","lo","ve","xi","qu","ha","yo","ti","sa","no"];
 const syllB = ["rin","mar","tuk","ven","sol","fer","lan","koi","zen","dor","pik","moi","tes","vex"];
@@ -300,7 +294,6 @@ function makeName(type) {
   const b = syllB[Math.floor(Math.random() * syllB.length)];
   return `${type === "g" ? "G" : "H"}-${a}${b}`;
 }
-
 function hsvToRgbString(hDeg, s, v) {
   const h = ((hDeg % 360) + 360) % 360;
   const c = v * s;
@@ -315,34 +308,23 @@ function hsvToRgbString(hDeg, s, v) {
   else { r = c; g = 0; b = x; }
   return `rgb(${Math.floor((r+m)*255)}, ${Math.floor((g+m)*255)}, ${Math.floor((b+m)*255)})`;
 }
-
 function makeColor(type) {
   const h = type === "g" ? rand(150, 90) : rand(25, 350);
   const s = rand(0.80, 0.55);
   const v = rand(0.95, 0.70);
   return hsvToRgbString(h, s, v);
 }
-
 function geneVector(g) { return [g.speed, g.turn, g.greed, g.caution, g.bite, g.size]; }
 function vecDist(a, b) {
   let s = 0;
   for (let i = 0; i < a.length; i++) { const d = a[i] - b[i]; s += d*d; }
   return Math.sqrt(s);
 }
-
 function createSpecies(type, fromGenesVec, tickNow) {
   const id = nextSpeciesId++;
-  speciesDB.set(id, {
-    id, type,
-    name: makeName(type),
-    color: makeColor(type),
-    count: 0,
-    centroid: fromGenesVec.slice(),
-    createdTick: tickNow
-  });
+  speciesDB.set(id, { id, type, name: makeName(type), color: makeColor(type), count: 0, centroid: fromGenesVec.slice(), createdTick: tickNow });
   return id;
 }
-
 function findNearestSpeciesId(type, genesVec) {
   let bestId = null, bestD = Infinity;
   for (const sp of speciesDB.values()) {
@@ -352,7 +334,6 @@ function findNearestSpeciesId(type, genesVec) {
   }
   return { bestId, bestD };
 }
-
 function assignSpeciesAtBirth(type, genesVec, parentSpeciesId, tickNow) {
   const SPLIT = settings.speciesSplit;
   const MERGE = Math.max(0.12, settings.speciesSplit * 0.60);
@@ -370,7 +351,6 @@ function assignSpeciesAtBirth(type, genesVec, parentSpeciesId, tickNow) {
 
   return createSpecies(type, genesVec, tickNow);
 }
-
 function updateSpeciesStats(ticksNow) {
   for (const sp of speciesDB.values()) sp.count = 0;
   const sums = new Map();
@@ -392,18 +372,9 @@ function updateSpeciesStats(ticksNow) {
     if (!sp || sp.count <= 0) continue;
     for (let i = 0; i < sum.length; i++) sp.centroid[i] = sum[i] / sp.count;
   }
-
-  // cleanup long-extinct
-  const EXTINCT_FOR_TICKS = 3500;
-  for (const [id, sp] of speciesDB.entries()) {
-    if (sp.count > 0) continue;
-    if (ticksNow - sp.createdTick > EXTINCT_FOR_TICKS) speciesDB.delete(id);
-  }
 }
 
-// =======================
-// AGENTS
-// =======================
+// ---------- Agents ----------
 class Agent {
   constructor(type, x, y, genes, speciesId = null) {
     this.type = type;
@@ -434,9 +405,8 @@ class Agent {
         ng[k] = clamp(ng[k] + delta, 0, 1);
       }
     }
-
-    const babySpeciesId = assignSpeciesAtBirth(this.type, geneVector(ng), this.speciesId, tickNow);
-    const baby = new Agent(this.type, this.x + rand(12, -12), this.y + rand(12, -12), ng, babySpeciesId);
+    const babySp = assignSpeciesAtBirth(this.type, geneVector(ng), this.speciesId, tickNow);
+    const baby = new Agent(this.type, this.x + rand(12, -12), this.y + rand(12, -12), ng, babySp);
     baby.energy = 0.65;
     baby.a = rand(Math.PI * 2);
     baby.reproCooldown = REPRO_COOLDOWN_TICKS;
@@ -447,43 +417,35 @@ class Agent {
 let grazers = [];
 let hunters = [];
 
-// =======================
-// LEGEND + FOLLOW
-// =======================
-let legendMode = "g"; // "g" or "h"
+// ---------- Legend / Follow ----------
+let legendMode = "g";
 let followedSpeciesId = null;
 
 tabG.addEventListener("click", () => { legendMode = "g"; tabG.classList.add("active"); tabH.classList.remove("active"); renderLegend(); });
 tabH.addEventListener("click", () => { legendMode = "h"; tabH.classList.add("active"); tabG.classList.remove("active"); renderLegend(); });
+unfollowBtn.addEventListener("click", () => { followedSpeciesId = null; renderLegend(); });
 
-unfollowBtn.addEventListener("click", () => {
-  followedSpeciesId = null;
-  renderLegend();
-});
-
-function topSpecies(type) {
+function listSpecies(type) {
   const arr = [];
   for (const sp of speciesDB.values()) if (sp.type === type && sp.count > 0) arr.push(sp);
   arr.sort((a, b) => b.count - a.count);
   return arr;
 }
-
 function renderLegend() {
-  const list = topSpecies(legendMode);
   legendListEl.innerHTML = "";
+  const list = listSpecies(legendMode);
 
-  if (list.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "spMeta";
-    empty.textContent = "No living species yet.";
-    legendListEl.appendChild(empty);
+  if (!list.length) {
+    const d = document.createElement("div");
+    d.className = "spMeta";
+    d.textContent = "No living species yet.";
+    legendListEl.appendChild(d);
     return;
   }
 
   for (const sp of list.slice(0, 40)) {
     const row = document.createElement("div");
     row.className = "spRow" + (sp.id === followedSpeciesId ? " following" : "");
-    row.title = "Click to follow";
 
     const left = document.createElement("div");
     left.className = "spLeft";
@@ -517,66 +479,54 @@ function renderLegend() {
     legendListEl.appendChild(row);
   }
 }
-
 function speciesCenter(speciesId) {
   let sx = 0, sy = 0, n = 0;
-  const arr = [...grazers, ...hunters];
-  for (const a of arr) {
-    if (a.speciesId !== speciesId) continue;
-    sx += a.x; sy += a.y; n++;
-  }
+  for (const a of grazers) if (a.speciesId === speciesId) { sx += a.x; sy += a.y; n++; }
+  for (const a of hunters) if (a.speciesId === speciesId) { sx += a.x; sy += a.y; n++; }
   if (!n) return null;
   return { x: sx / n, y: sy / n, n };
 }
-
 function followCamera() {
   if (followedSpeciesId == null) return;
   const c = speciesCenter(followedSpeciesId);
   if (!c) return;
-
-  // smooth follow (lerp)
   const t = 0.08;
   cam.x = cam.x + (c.x - cam.x) * t;
   cam.y = cam.y + (c.y - cam.y) * t;
 }
 
-// =======================
-// INIT / RESET
-// =======================
-let nextSpeciesInitDone = false;
+// ---------- Init / Reset ----------
+let ticks = 0;
+let paused = false;
+let frameCounter = 0;
 
 function initSpecies(tickNow) {
   speciesDB.clear();
   nextSpeciesId = 1;
-
   const gSeed = geneVector({ speed: 0.45, turn: 0.40, greed: 0.55, caution: 0.40, bite: 0.40, size: 0.25 });
   const hSeed = geneVector({ speed: 0.50, turn: 0.45, greed: 0.45, caution: 0.35, bite: 0.55, size: 0.30 });
-
   createSpecies("g", gSeed, tickNow);
   createSpecies("h", hSeed, tickNow);
-  nextSpeciesInitDone = true;
 }
-
-function resetSimFresh() {
-  grazers = [];
-  hunters = [];
+function resetWorldFresh() {
+  ticks = 0;
+  frameCounter = 0;
   resetPlants();
   initSpecies(0);
 
-  const gFirstId = [...speciesDB.values()].find(s => s.type === "g")?.id ?? null;
-  const hFirstId = [...speciesDB.values()].find(s => s.type === "h")?.id ?? null;
+  const gFirst = [...speciesDB.values()].find(s => s.type === "g")?.id ?? null;
+  const hFirst = [...speciesDB.values()].find(s => s.type === "h")?.id ?? null;
 
-  for (let i = 0; i < START_GRAZERS; i++) grazers.push(new Agent("g", rand(W()), rand(H()), null, gFirstId));
-  for (let i = 0; i < START_HUNTERS; i++) hunters.push(new Agent("h", rand(W()), rand(H()), null, hFirstId));
+  grazers = [new Agent("g", rand(W()), rand(H()), null, gFirst)];
+  hunters = [new Agent("h", rand(W()), rand(H()), null, hFirst)];
 
   resetView();
   followedSpeciesId = null;
-  renderLegend();
+  legendMode = "g";
+  tabG.classList.add("active"); tabH.classList.remove("active");
 }
 
-// =======================
-// MOVEMENT / BEHAVIOR
-// =======================
+// ---------- Movement / Behavior ----------
 function steerToward(agent, tx, ty, strength) {
   const angTo = Math.atan2(ty - agent.y, tx - agent.x);
   let da = angTo - agent.a;
@@ -656,6 +606,7 @@ function hunterStep(h) {
 
   if (target) {
     steerToward(h, target.x, target.y, 0.55 + h.g.bite * 0.95);
+
     const eatR = EAT_RADIUS_BASE + h.g.size * 5.5;
     if (bestD < eatR * eatR) {
       const dmg = HUNT_DAMAGE * (0.55 + h.g.bite) * (0.7 + h.g.size * 0.9);
@@ -703,9 +654,7 @@ function handleLife(list, tickNow) {
   }
 }
 
-// =======================
-// DRAW (camera + optional labels)
-// =======================
+// ---------- Draw ----------
 function clearFrame() {
   ctx.save();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -719,14 +668,12 @@ function clearFrame() {
   }
   ctx.restore();
 }
-
 function applyCameraTransform() {
   const cx = W() / 2, cy = H() / 2;
   ctx.translate(cx, cy);
   ctx.scale(cam.scale, cam.scale);
   ctx.translate(-cam.x, -cam.y);
 }
-
 function drawHeatmap() {
   const w = W(), h = H();
   const cellW = w / GRID, cellH = h / GRID;
@@ -738,69 +685,52 @@ function drawHeatmap() {
     ctx.fillRect(x * cellW, y * cellH, cellW + 0.5, cellH + 0.5);
   }
 }
-
-function drawAgents(withLabels) {
-  for (const g of grazers) {
-    const sp = speciesDB.get(g.speciesId);
-    const color = sp?.color ?? "rgb(120,200,140)";
-    const r = 2.2 + g.g.size * 10.5;
-
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.arc(g.x, g.y, r, 0, Math.PI * 2);
-    ctx.fill();
-
-    if (withLabels && sp) drawLabel(g.x, g.y, r, sp.name);
-  }
-
-  for (const h of hunters) {
-    const sp = speciesDB.get(h.speciesId);
-    const color = sp?.color ?? "rgb(210,90,90)";
-    const r = 2.8 + h.g.size * 12.0;
-
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.arc(h.x, h.y, r, 0, Math.PI * 2);
-    ctx.fill();
-
-    if (withLabels && sp) drawLabel(h.x, h.y, r, sp.name);
-  }
-}
-
 function drawLabel(x, y, r, text) {
-  // keep label size consistent on screen by scaling inverse to cam.scale
   const inv = 1 / cam.scale;
-  const fontPx = clamp(12 * inv, 2.5, 10); // stays readable but not huge
+  const fontPx = clamp(12 * inv, 2.5, 10);
   ctx.save();
   ctx.font = `${fontPx}px system-ui, -apple-system, Segoe UI, Roboto, Arial`;
   ctx.textAlign = "center";
   ctx.textBaseline = "bottom";
   ctx.fillStyle = "rgba(0,0,0,0.55)";
-  ctx.fillText(text, x, y - (r + 6*inv));
+  ctx.fillText(text, x, y - (r + 6 * inv));
   ctx.fillStyle = "rgba(240,245,255,0.92)";
-  ctx.fillText(text, x, y - (r + 7.2*inv));
+  ctx.fillText(text, x, y - (r + 7.2 * inv));
   ctx.restore();
 }
-
+function drawAgents(withLabels) {
+  for (const g of grazers) {
+    const sp = speciesDB.get(g.speciesId);
+    const color = sp?.color ?? "rgb(120,200,140)";
+    const r = 2.2 + g.g.size * 10.5;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(g.x, g.y, r, 0, Math.PI * 2);
+    ctx.fill();
+    if (withLabels && sp) drawLabel(g.x, g.y, r, sp.name);
+  }
+  for (const h of hunters) {
+    const sp = speciesDB.get(h.speciesId);
+    const color = sp?.color ?? "rgb(210,90,90)";
+    const r = 2.8 + h.g.size * 12.0;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(h.x, h.y, r, 0, Math.PI * 2);
+    ctx.fill();
+    if (withLabels && sp) drawLabel(h.x, h.y, r, sp.name);
+  }
+}
 function draw() {
   clearFrame();
   ctx.save();
   applyCameraTransform();
-
   if (drawHeatEl.checked) drawHeatmap();
-
-  const LABEL_ZOOM_THRESHOLD = 3.0;
-  const withLabels = showLabelsEl.checked && cam.scale >= LABEL_ZOOM_THRESHOLD;
+  const withLabels = showLabelsEl.checked && cam.scale >= 3.0;
   drawAgents(withLabels);
-
   ctx.restore();
 }
 
-// =======================
-// SAVE/LOAD WORLD (so it “keeps going”)
-// =======================
-
-// pack plants into Uint16 to keep storage smaller
+// ---------- World save/load (slot) ----------
 function packPlants() {
   const out = new Uint16Array(plant.length);
   for (let i = 0; i < plant.length; i++) out[i] = Math.floor(clamp(plant[i], 0, 1) * 65535);
@@ -812,9 +742,10 @@ function unpackPlants(arr) {
   for (let i = 0; i < u.length; i++) plant[i] = u[i] / 65535;
 }
 
+function q(v) { return Math.floor(clamp(v, 0, 1) * 65535); }
+function uq(v) { return clamp(v / 65535, 0, 1); }
+
 function packAgent(a) {
-  // quantize genes to uint16-ish but store as ints (smaller + stable)
-  const q = (v) => Math.floor(clamp(v, 0, 1) * 65535);
   return [
     a.type,
     a.x, a.y,
@@ -827,126 +758,165 @@ function packAgent(a) {
   ];
 }
 function unpackAgent(row) {
-  const uq = (v) => clamp(v / 65535, 0, 1);
   const type = row[0];
   const a = new Agent(type, row[1], row[2], null, row[7]);
   a.a = row[3];
   a.energy = row[4];
   a.age = row[5];
   a.reproCooldown = row[6];
-  a.g = {
-    speed: uq(row[8]),
-    turn: uq(row[9]),
-    greed: uq(row[10]),
-    caution: uq(row[11]),
-    bite: uq(row[12]),
-    size: uq(row[13]),
-  };
+  a.g = { speed: uq(row[8]), turn: uq(row[9]), greed: uq(row[10]), caution: uq(row[11]), bite: uq(row[12]), size: uq(row[13]) };
   return a;
 }
 
 function packSpecies() {
   const arr = [];
   for (const sp of speciesDB.values()) {
-    arr.push([
-      sp.id, sp.type, sp.name, sp.color,
-      sp.count,
-      sp.centroid,
-      sp.createdTick
-    ]);
+    arr.push([sp.id, sp.type, sp.name, sp.color, sp.count, sp.centroid, sp.createdTick]);
   }
   return arr;
 }
 function unpackSpecies(arr) {
   speciesDB.clear();
+  let maxId = 0;
   for (const row of arr) {
-    speciesDB.set(row[0], {
-      id: row[0],
-      type: row[1],
-      name: row[2],
-      color: row[3],
-      count: row[4],
-      centroid: row[5],
-      createdTick: row[6]
-    });
+    speciesDB.set(row[0], { id: row[0], type: row[1], name: row[2], color: row[3], count: row[4], centroid: row[5], createdTick: row[6] });
+    if (row[0] > maxId) maxId = row[0];
   }
-  nextSpeciesId = Math.max(1, ...Array.from(speciesDB.keys())) + 1;
+  nextSpeciesId = maxId + 1;
 }
 
-function saveWorld() {
+function makeWorldPayload() {
+  return {
+    version: 3,
+    savedAt: Date.now(),
+    ticks,
+    cam: { ...cam },
+    followedSpeciesId,
+    plant: packPlants(),
+    species: packSpecies(),
+    grazers: grazers.map(packAgent),
+    hunters: hunters.map(packAgent),
+  };
+}
+
+function applyWorldPayload(obj) {
+  if (!obj || obj.version !== 3) return false;
+
+  ticks = obj.ticks ?? 0;
+  frameCounter = 0;
+
+  if (obj.cam) {
+    cam.x = obj.cam.x ?? (W() / 2);
+    cam.y = obj.cam.y ?? (H() / 2);
+    cam.scale = obj.cam.scale ?? 1;
+  } else {
+    resetView();
+  }
+
+  followedSpeciesId = obj.followedSpeciesId ?? null;
+
+  if (obj.plant) unpackPlants(obj.plant); else resetPlants();
+  if (obj.species) unpackSpecies(obj.species); else initSpecies(ticks);
+
+  grazers = (obj.grazers ?? []).map(unpackAgent);
+  hunters = (obj.hunters ?? []).map(unpackAgent);
+
+  // Ensure at least 1/1 exists if imported file is empty
+  if (grazers.length === 0 || hunters.length === 0) {
+    resetWorldFresh();
+  }
+
+  updateSpeciesStats(ticks);
+  return true;
+}
+
+function saveWorldToSlot() {
   if (!autosaveEl.checked) return;
-  try {
-    const payload = {
-      t: Date.now(),
-      ticks,
-      cam,
-      followedSpeciesId,
-      plant: packPlants(),
-      species: packSpecies(),
-      grazers: grazers.map(packAgent),
-      hunters: hunters.map(packAgent),
-    };
-    localStorage.setItem(WORLD_KEY, JSON.stringify(payload));
-  } catch {}
+  try { localStorage.setItem(worldKey(), JSON.stringify(makeWorldPayload())); } catch {}
 }
-
-function loadWorld() {
+function loadWorldFromSlot() {
   try {
-    const raw = localStorage.getItem(WORLD_KEY);
+    const raw = localStorage.getItem(worldKey());
     if (!raw) return false;
     const obj = JSON.parse(raw);
-
-    ticks = obj.ticks ?? 0;
-    if (obj.cam) {
-      cam.x = obj.cam.x ?? (W()/2);
-      cam.y = obj.cam.y ?? (H()/2);
-      cam.scale = obj.cam.scale ?? 1;
-    } else {
-      resetView();
-    }
-
-    followedSpeciesId = obj.followedSpeciesId ?? null;
-
-    if (obj.plant) unpackPlants(obj.plant);
-    if (obj.species) unpackSpecies(obj.species);
-
-    grazers = (obj.grazers ?? []).map(unpackAgent);
-    hunters = (obj.hunters ?? []).map(unpackAgent);
-
-    // Fast-forward based on time since last save
-    const last = obj.t ?? Date.now();
-    const elapsedSec = Math.max(0, (Date.now() - last) / 1000);
-
-    // Convert real seconds -> sim ticks (tune this)
-    const TICKS_PER_SECOND = 7; // makes “offline evolution” noticeable but not insane
-    let offlineTicks = Math.floor(elapsedSec * TICKS_PER_SECOND);
-
-    // Safety cap so you don’t freeze your browser if it was closed for days
-    offlineTicks = Math.min(offlineTicks, 25000);
-
-    if (!nextSpeciesInitDone && speciesDB.size === 0) initSpecies(ticks);
-
-    // run offline
-    for (let i = 0; i < offlineTicks; i++) tickOnce(true);
-
-    renderLegend();
-    return true;
+    return applyWorldPayload(obj);
   } catch {
     return false;
   }
 }
 
-// Autosave every few seconds
-let lastSaveMs = 0;
-const SAVE_EVERY_MS = 4000;
+// ---------- Export / Import ----------
+function downloadTextFile(filename, text) {
+  const blob = new Blob([text], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
 
-// =======================
-// MAIN TICK LOOP
-// =======================
-let paused = false;
-let frameCounter = 0;
+exportBtn.addEventListener("click", () => {
+  const payload = makeWorldPayload();
+  const name = `ecosim_world_slot${currentSlot}.json`;
+  downloadTextFile(name, JSON.stringify(payload));
+});
 
-function tickOnce(isOffline = false) {
+importFile.addEventListener("change", async () => {
+  const file = importFile.files?.[0];
+  if (!file) return;
+
+  try {
+    const text = await file.text();
+    const obj = JSON.parse(text);
+
+    if (!applyWorldPayload(obj)) {
+      alert("Import failed: wrong file/version.");
+      importFile.value = "";
+      return;
+    }
+
+    // Save into the current slot
+    try { localStorage.setItem(worldKey(), JSON.stringify(makeWorldPayload())); } catch {}
+    renderLegend();
+    importFile.value = "";
+  } catch {
+    alert("Import failed: invalid JSON file.");
+    importFile.value = "";
+  }
+});
+
+clearSlotBtn.addEventListener("click", () => {
+  try { localStorage.removeItem(worldKey()); } catch {}
+  resetWorldFresh();
+  renderLegend();
+  saveWorldToSlot();
+});
+
+// ---------- UI Buttons ----------
+pauseBtn.addEventListener("click", () => {
+  paused = !paused;
+  pauseBtn.textContent = paused ? "Resume" : "Pause";
+});
+resetBtn.addEventListener("click", () => {
+  paused = false;
+  pauseBtn.textContent = "Pause";
+  resetWorldFresh();
+  renderLegend();
+  saveWorldToSlot();
+});
+window.addEventListener("beforeunload", () => {
+  saveWorldToSlot();
+  saveSettings();
+});
+
+// ---------- Main loop ----------
+let lastLegendUpdate = 0;
+let lastSave = 0;
+
+function tickOnce() {
   regenPlants();
 
   for (const g of grazers) grazerStep(g);
@@ -955,12 +925,24 @@ function tickOnce(isOffline = false) {
   handleLife(grazers, ticks);
   handleLife(hunters, ticks);
 
-  if (ticks % 25 === 0) {
-    updateSpeciesStats(ticks);
-    if (!isOffline) renderLegend();
-  }
+  if (ticks % 25 === 0) updateSpeciesStats(ticks);
 
   ticks++;
+}
+
+function updateStatsText() {
+  const avg = (arr, key) => arr.length ? (arr.reduce((s,a)=>s+a.g[key],0)/arr.length).toFixed(2) : "—";
+  const sizeAvg = (arr) => arr.length ? (arr.reduce((s,a)=>s+a.g.size,0)/arr.length).toFixed(2) : "—";
+  const livingSpecies = Array.from(speciesDB.values()).filter(s => s.count > 0).length;
+
+  statsEl.textContent =
+`Slot: ${currentSlot} | Ticks: ${ticks}
+Grazers: ${grazers.length} | Hunters: ${hunters.length} | Living species: ${livingSpecies}
+Avg size: grazers ${sizeAvg(grazers)} | hunters ${sizeAvg(hunters)}
+Avg genes (grazers): speed ${avg(grazers,"speed")} greed ${avg(grazers,"greed")} caution ${avg(grazers,"caution")}
+Avg genes (hunters): speed ${avg(hunters,"speed")} bite  ${avg(hunters,"bite")}
+Pressure: ${densityPressure().toFixed(2)} | Plant growth: ${settings.plantGrowth.toFixed(3)} | Mutation: ${settings.mutRate.toFixed(2)} / ${settings.mutStrength.toFixed(2)} | Speciation: ${settings.speciesSplit.toFixed(2)}
+Following species: ${followedSpeciesId ?? "—"}`;
 }
 
 function step() {
@@ -969,29 +951,23 @@ function step() {
     const doTick = (frameCounter % settings.tickEvery === 0);
 
     if (doTick) {
-      tickOnce(false);
+      tickOnce();
       followCamera();
 
-      if (ticks % 25 === 0) {
-        const avg = (arr, key) => arr.length ? (arr.reduce((s,a)=>s+a.g[key],0)/arr.length).toFixed(2) : "—";
-        const sizeAvg = (arr) => arr.length ? (arr.reduce((s,a)=>s+a.g.size,0)/arr.length).toFixed(2) : "—";
-
-        const speciesCount = Array.from(speciesDB.values()).filter(s => s.count > 0).length;
-        statsEl.textContent =
-`Grazers: ${grazers.length} | Hunters: ${hunters.length} | Living species: ${speciesCount}
-Avg size: grazers ${sizeAvg(grazers)} | hunters ${sizeAvg(hunters)}
-Avg genes (grazers): speed ${avg(grazers,"speed")} greed ${avg(grazers,"greed")} caution ${avg(grazers,"caution")}
-Avg genes (hunters): speed ${avg(hunters,"speed")} bite  ${avg(hunters,"bite")}
-Pressure: ${densityPressure().toFixed(2)} | Plant growth: ${settings.plantGrowth.toFixed(3)} | Mutation: ${settings.mutRate.toFixed(2)} / ${settings.mutStrength.toFixed(2)} | Speciation: ${settings.speciesSplit.toFixed(2)}
-Following: ${followedSpeciesId ?? "—"}`;
+      // Update stats + legend sometimes
+      if (ticks % 25 === 0) updateStatsText();
+      if (ticks - lastLegendUpdate >= 50) {
+        lastLegendUpdate = ticks;
+        renderLegend();
       }
-    }
 
-    // periodic autosave
-    const now = Date.now();
-    if (autosaveEl.checked && now - lastSaveMs > SAVE_EVERY_MS) {
-      lastSaveMs = now;
-      saveWorld();
+      // Autosave sometimes (not every tick)
+      const now = performance.now();
+      if (autosaveEl.checked && now - lastSave > 2500) {
+        lastSave = now;
+        saveWorldToSlot();
+        saveSettings();
+      }
     }
   }
 
@@ -999,70 +975,19 @@ Following: ${followedSpeciesId ?? "—"}`;
   requestAnimationFrame(step);
 }
 
-// =======================
-// DRAW LOOP START
-// =======================
-function startSim() {
-  // attempt to load saved world
-  const loaded = loadWorld();
-  if (!loaded) {
-    resetSimFresh();
-    renderLegend();
-    resetView();
-  }
+// ---------- Start ----------
+function start() {
+  // default slot 1 (or whatever is selected)
+  currentSlot = parseInt(slotSelect.value, 10) || 1;
+  resetView();
+
+  // Try load from slot; else make fresh
+  if (!loadWorldFromSlot()) resetWorldFresh();
+
+  updateSpeciesStats(ticks);
+  renderLegend();
+  updateStatsText();
+
   requestAnimationFrame(step);
 }
-startSim();
-
-// =======================
-// BUTTONS
-// =======================
-pauseBtn.addEventListener("click", () => {
-  paused = !paused;
-  pauseBtn.textContent = paused ? "Resume" : "Pause";
-});
-
-resetBtn.addEventListener("click", () => {
-  paused = false;
-  pauseBtn.textContent = "Pause";
-  ticks = 0;
-  frameCounter = 0;
-  resetSimFresh();
-  saveWorld();
-});
-
-clearSaveBtn.addEventListener("click", () => {
-  try { localStorage.removeItem(WORLD_KEY); } catch {}
-  ticks = 0;
-  frameCounter = 0;
-  resetSimFresh();
-});
-
-window.addEventListener("beforeunload", () => {
-  // save once right before closing
-  saveWorld();
-});
-
-// =======================
-// DRAW HELPERS
-// =======================
-function clearFrame() {
-  ctx.save();
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  const w = W(), h = H();
-  if (!drawTrailsEl.checked) {
-    ctx.fillStyle = "#06090d";
-    ctx.fillRect(0, 0, w, h);
-  } else {
-    ctx.fillStyle = "rgba(6,9,13,0.14)";
-    ctx.fillRect(0, 0, w, h);
-  }
-  ctx.restore();
-}
-
-function applyCameraTransform() {
-  const cx = W() / 2, cy = H() / 2;
-  ctx.translate(cx, cy);
-  ctx.scale(cam.scale, cam.scale);
-  ctx.translate(-cam.x, -cam.y);
-}
+start();
