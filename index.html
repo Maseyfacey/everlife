@@ -26,9 +26,16 @@
       </label>
 
       <label class="chk">
-        <input type="checkbox" id="autosave" checked />
-        Autosave settings
+        <input type="checkbox" id="showLabels" />
+        Species labels (only when zoomed in)
       </label>
+
+      <label class="chk">
+        <input type="checkbox" id="autosave" checked />
+        Autosave
+      </label>
+
+      <button id="clearSaveBtn" class="danger">Clear Save</button>
     </div>
 
     <div class="controls">
@@ -38,7 +45,7 @@
           <span class="val" id="v_tickEvery">2</span>
         </div>
         <input id="tickEvery" type="range" min="1" max="10" step="1" />
-        <div class="hint">Higher = slower (runs 1 tick every N frames)</div>
+        <div class="hint">Higher = slower (1 tick every N frames)</div>
       </div>
 
       <div class="ctl">
@@ -79,14 +86,35 @@
   </header>
 
   <main>
-    <canvas id="c"></canvas>
+    <div class="wrap">
+      <canvas id="c"></canvas>
+
+      <!-- LEGEND PANEL -->
+      <aside id="legend" class="legend">
+        <div class="legendTop">
+          <div>
+            <div class="legendTitle">Species</div>
+            <div class="legendSub">Click a species to follow it</div>
+          </div>
+          <button id="unfollowBtn" class="small">Unfollow</button>
+        </div>
+
+        <div class="legendTabs">
+          <button id="tabG" class="tab active">Grazers</button>
+          <button id="tabH" class="tab">Hunters</button>
+        </div>
+
+        <div id="legendList" class="legendList"></div>
+      </aside>
+    </div>
+
     <div class="zoomHint">
       Wheel = zoom • Drag = pan • Double-click = reset view
     </div>
   </main>
 
   <footer>
-    Settings save in your browser automatically when Autosave is on.
+    Autosave stores the world in your browser and “fast-forwards” when you reopen.
   </footer>
 
   <script src="sim.js"></script>
