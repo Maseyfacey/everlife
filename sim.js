@@ -2,7 +2,8 @@
 // + SIZE gene (visible + affects speed/cost)
 // + SPECIES splitting (auto-naming + stable colors)
 // + NO hard population caps (soft pressure prevents runaway growth)
-// Runs fully in the browser (GitHub Pages friendly)
+// + UI dials saved in localStorage
+// + Infinite zoom + pan (visual only)
 
 const canvas = document.getElementById("c");
 const ctx = canvas.getContext("2d", { alpha: false });
@@ -10,8 +11,24 @@ const ctx = canvas.getContext("2d", { alpha: false });
 const statsEl = document.getElementById("stats");
 const pauseBtn = document.getElementById("pauseBtn");
 const resetBtn = document.getElementById("resetBtn");
+const resetViewBtn = document.getElementById("resetViewBtn");
 const drawTrailsEl = document.getElementById("drawTrails");
 const drawHeatEl = document.getElementById("drawHeat");
+const autosaveEl = document.getElementById("autosave");
+
+// sliders
+const tickEveryEl = document.getElementById("tickEvery");
+const plantGrowthEl = document.getElementById("plantGrowth");
+const mutRateEl = document.getElementById("mutRate");
+const mutStrengthEl = document.getElementById("mutStrength");
+const speciesSplitEl = document.getElementById("speciesSplit");
+
+// slider values text
+const v_tickEvery = document.getElementById("v_tickEvery");
+const v_plantGrowth = document.getElementById("v_plantGrowth");
+const v_mutRate = document.getElementById("v_mutRate");
+const v_mutStrength = document.getElementById("v_mutStrength");
+const v_speciesSplit = document.getElementById("v_speciesSplit");
 
 function fitCanvas() {
   const rect = canvas.getBoundingClientRect();
@@ -37,22 +54,180 @@ function wrapPos(o) {
 }
 
 // =======================
-// SIM SPEED / PACING
+// SETTINGS (UI + SAVING)
 // =======================
-// Only simulate one "tick" every N frames to make it visibly slow.
-const TICK_EVERY_N_FRAMES = 2; // 3-5 = slower
-let frameCounter = 0;
+const STORAGE_KEY = "ecosim_settings_v1";
+
+const defaults = {
+  tickEvery: 2,
+  plantGrowth: 0.006,
+  mutRate: 0.10,
+  mutStrength: 0.10,
+  speciesSplit: 0.30,
+  autosave: true,
+};
+
+let settings = { ...defaults };
+
+function loadSettings() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    const obj = JSON.parse(raw);
+    settings = { ...defaults, ...obj };
+  } catch { /* ignore */ }
+}
+
+function saveSettings() {
+  if (!autosaveEl.checked) return;
+  const obj = {
+    tickEvery: settings.tickEvery,
+    plantGrowth: settings.plantGrowth,
+    mutRate: settings.mutRate,
+    mutStrength: settings.mutStrength,
+    speciesSplit: settings.speciesSplit,
+    autosave: autosaveEl.checked,
+  };
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(obj)); } catch { /* ignore */ }
+}
+
+function syncUIFromSettings() {
+  tickEveryEl.value = String(settings.tickEvery);
+  plantGrowthEl.value = String(settings.plantGrowth);
+  mutRateEl.value = String(settings.mutRate);
+  mutStrengthEl.value = String(settings.mutStrength);
+  speciesSplitEl.value = String(settings.speciesSplit);
+  autosaveEl.checked = !!settings.autosave;
+
+  v_tickEvery.textContent = String(settings.tickEvery);
+  v_plantGrowth.textContent = settings.plantGrowth.toFixed(3);
+  v_mutRate.textContent = settings.mutRate.toFixed(2);
+  v_mutStrength.textContent = settings.mutStrength.toFixed(2);
+  v_speciesSplit.textContent = settings.speciesSplit.toFixed(2);
+}
+
+function applyUIHandlers() {
+  autosaveEl.addEventListener("change", () => {
+    settings.autosave = autosaveEl.checked;
+    saveSettings();
+  });
+
+  tickEveryEl.addEventListener("input", () => {
+    settings.tickEvery = parseInt(tickEveryEl.value, 10);
+    v_tickEvery.textContent = String(settings.tickEvery);
+    saveSettings();
+  });
+
+  plantGrowthEl.addEventListener("input", () => {
+    settings.plantGrowth = parseFloat(plantGrowthEl.value);
+    v_plantGrowth.textContent = settings.plantGrowth.toFixed(3);
+    saveSettings();
+  });
+
+  mutRateEl.addEventListener("input", () => {
+    settings.mutRate = parseFloat(mutRateEl.value);
+    v_mutRate.textContent = settings.mutRate.toFixed(2);
+    saveSettings();
+  });
+
+  mutStrengthEl.addEventListener("input", () => {
+    settings.mutStrength = parseFloat(mutStrengthEl.value);
+    v_mutStrength.textContent = settings.mutStrength.toFixed(2);
+    saveSettings();
+  });
+
+  speciesSplitEl.addEventListener("input", () => {
+    settings.speciesSplit = parseFloat(speciesSplitEl.value);
+    v_speciesSplit.textContent = settings.speciesSplit.toFixed(2);
+    saveSettings();
+  });
+}
+
+loadSettings();
+syncUIFromSettings();
+applyUIHandlers();
+
+// =======================
+// CAMERA (INFINITE ZOOM + PAN)
+// =======================
+const cam = {
+  x: W() / 2,
+  y: H() / 2,
+  scale: 1.0,
+};
+
+function resetView() {
+  cam.x = W() / 2;
+  cam.y = H() / 2;
+  cam.scale = 1.0;
+}
+resetViewBtn.addEventListener("click", resetView);
+
+canvas.addEventListener("dblclick", (e) => {
+  e.preventDefault();
+  resetView();
+});
+
+// Convert screen coords (canvas CSS pixels) to world coords (sim coords)
+function screenToWorld(sx, sy) {
+  // world = cam center + (screen-center)/scale
+  const cx = W() / 2;
+  const cy = H() / 2;
+  return {
+    x: cam.x + (sx - cx) / cam.scale,
+    y: cam.y + (sy - cy) / cam.scale
+  };
+}
+
+// Wheel zoom centered at mouse position
+canvas.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+
+  const before = screenToWorld(mx, my);
+
+  // infinite zoom factor
+  const factor = Math.pow(1.0015, -e.deltaY);
+  cam.scale = clamp(cam.scale * factor, 0.00001, 1e9);
+
+  const after = screenToWorld(mx, my);
+
+  // keep the point under the mouse stable
+  cam.x += (before.x - after.x);
+  cam.y += (before.y - after.y);
+}, { passive: false });
+
+// Drag pan
+let dragging = false;
+let lastX = 0, lastY = 0;
+
+canvas.addEventListener("mousedown", (e) => {
+  dragging = true;
+  lastX = e.clientX;
+  lastY = e.clientY;
+});
+
+window.addEventListener("mouseup", () => dragging = false);
+
+window.addEventListener("mousemove", (e) => {
+  if (!dragging) return;
+  const dx = e.clientX - lastX;
+  const dy = e.clientY - lastY;
+  lastX = e.clientX;
+  lastY = e.clientY;
+
+  // pan in world units
+  cam.x -= dx / cam.scale;
+  cam.y -= dy / cam.scale;
+});
 
 // =======================
 // PLANTS
 // =======================
 const GRID = 120;
 const PLANT_MAX = 1.0;
-
-// slower plant regrowth
-const PLANT_GROWTH = 0.006;
-
-// grazers eat slower
 const PLANT_EAT_RATE = 0.08;
 
 let plant = new Float32Array(GRID * GRID);
@@ -91,8 +266,9 @@ function eatPlantAt(x, y, amount) {
 }
 
 function regenPlants() {
+  const g = settings.plantGrowth;
   for (let i = 0; i < plant.length; i++) {
-    plant[i] = clamp(plant[i] + PLANT_GROWTH * (1 - plant[i]), 0, PLANT_MAX);
+    plant[i] = clamp(plant[i] + g * (1 - plant[i]), 0, PLANT_MAX);
   }
 }
 
@@ -104,47 +280,31 @@ function resetPlants() {
 }
 
 // =======================
-// EVOLUTION / REPRODUCTION
+// SIM CONSTANTS
 // =======================
-const MUT_RATE = 0.10;
-const MUT_STRENGTH = 0.10;
-
-// Much slower reproduction
 const REPRO_THRESHOLD = 1.35;
 const REPRO_COST = 0.70;
-
-// Reproduction cooldown (prevents chain-birthing)
 const REPRO_COOLDOWN_TICKS = 900;
 
-// =======================
-// MOVEMENT / ENERGY
-// =======================
 const SPEED_MIN = 0.12;
 const SPEED_MAX = 0.95;
 const BASE_MOVE_COST = 0.0024;
 const TURN_RATE_BASE = 0.18;
 
-// Vision
 const GRAZER_VISION = 22;
 const HUNTER_VISION = 34;
 
-// Eating / biting
 const EAT_RADIUS_BASE = 6.5;
 const HUNT_DAMAGE = 0.28;
 
-// Start with exactly two
 const START_GRAZERS = 1;
 const START_HUNTERS = 1;
 
-// =======================
-// SOFT POPULATION CONTROL (NO HARD CAPS)
-// =======================
+// Soft population control
 const TARGET_GRAZERS = 120;
 const TARGET_HUNTERS = 55;
 
-function sigmoid01(x) {
-  return 1 / (1 + Math.exp(-x));
-}
+function sigmoid01(x) { return 1 / (1 + Math.exp(-x)); }
 
 function densityPressure() {
   const g = grazers.length;
@@ -154,45 +314,23 @@ function densityPressure() {
   return clamp(0.55 * gP + 0.45 * hP, 0, 1);
 }
 
-function localPlantOk(x, y) {
-  return samplePlant(x, y) > 0.20;
-}
+function localPlantOk(x, y) { return samplePlant(x, y) > 0.20; }
 
-function preyAbundant() {
-  return grazers.length > Math.max(18, hunters.length * 1.6);
-}
+function preyAbundant() { return grazers.length > Math.max(18, hunters.length * 1.6); }
 
 // =======================
 // SPECIES SYSTEM
 // =======================
-// Each agent belongs to a speciesId. Species are created at birth when genes
-// drift far enough from parent species centroid (within same type).
-//
-// You can tweak how often speciation happens with SPECIES_SPLIT_DISTANCE.
-
-const SPECIES_SPLIT_DISTANCE = 0.30; // lower = more new species; higher = fewer
-const SPECIES_MERGE_DISTANCE = 0.18; // optional: if a newborn is close to a species, attach to it
-const SPECIES_MAX = 120;            // safety: stop unlimited IDs (still soft)
-
 let nextSpeciesId = 1;
-const speciesDB = new Map(); // speciesId -> { id, type, name, color, count, centroid, createdTick }
+const speciesDB = new Map(); // id -> { id,type,name,color,count,centroid,createdTick }
 
-const syllA = ["ka", "zu", "mi", "ra", "to", "shi", "na", "lo", "ve", "xi", "qu", "ha", "yo", "ti", "sa", "no"];
-const syllB = ["rin", "mar", "tuk", "ven", "sol", "fer", "lan", "koi", "zen", "dor", "pik", "moi", "tes", "vex"];
+const syllA = ["ka","zu","mi","ra","to","shi","na","lo","ve","xi","qu","ha","yo","ti","sa","no"];
+const syllB = ["rin","mar","tuk","ven","sol","fer","lan","koi","zen","dor","pik","moi","tes","vex"];
 
 function makeName(type) {
   const a = syllA[Math.floor(Math.random() * syllA.length)];
   const b = syllB[Math.floor(Math.random() * syllB.length)];
-  const tag = type === "g" ? "G" : "H";
-  return `${tag}-${a}${b}`;
-}
-
-function makeColor(type) {
-  // HSV-ish generated colors, biased by type so grazers stay greener, hunters redder
-  const h = type === "g" ? rand(150, 90) : rand(25, 350); // degrees-ish
-  const s = rand(75, 55);
-  const v = rand(95, 70);
-  return hsvToRgbString(h, s / 100, v / 100);
+  return `${type === "g" ? "G" : "H"}-${a}${b}`;
 }
 
 function hsvToRgbString(hDeg, s, v) {
@@ -215,8 +353,14 @@ function hsvToRgbString(hDeg, s, v) {
   return `rgb(${R}, ${G}, ${B})`;
 }
 
+function makeColor(type) {
+  const h = type === "g" ? rand(150, 90) : rand(25, 350);
+  const s = rand(0.80, 0.55);
+  const v = rand(0.95, 0.70);
+  return hsvToRgbString(h, s, v);
+}
+
 function geneVector(g) {
-  // Keep consistent order
   return [g.speed, g.turn, g.greed, g.caution, g.bite, g.size];
 }
 
@@ -230,28 +374,21 @@ function vecDist(a, b) {
 }
 
 function createSpecies(type, fromGenesVec, tickNow) {
-  if (speciesDB.size >= SPECIES_MAX) {
-    // If we hit safety max, just reuse nearest later.
-    return null;
-  }
   const id = nextSpeciesId++;
-  const sp = {
-    id,
-    type,
+  speciesDB.set(id, {
+    id, type,
     name: makeName(type),
     color: makeColor(type),
     count: 0,
     centroid: fromGenesVec.slice(),
     createdTick: tickNow
-  };
-  speciesDB.set(id, sp);
+  });
   return id;
 }
 
 function findNearestSpeciesId(type, genesVec) {
   let bestId = null;
   let bestD = Infinity;
-
   for (const sp of speciesDB.values()) {
     if (sp.type !== type) continue;
     const d = vecDist(genesVec, sp.centroid);
@@ -261,7 +398,9 @@ function findNearestSpeciesId(type, genesVec) {
 }
 
 function assignSpeciesAtBirth(type, genesVec, parentSpeciesId, tickNow) {
-  // Try: attach to parent if still close
+  const SPECIES_SPLIT_DISTANCE = settings.speciesSplit;
+  const SPECIES_MERGE_DISTANCE = Math.max(0.12, settings.speciesSplit * 0.60);
+
   if (parentSpeciesId != null && speciesDB.has(parentSpeciesId)) {
     const parentSp = speciesDB.get(parentSpeciesId);
     if (parentSp.type === type) {
@@ -270,52 +409,39 @@ function assignSpeciesAtBirth(type, genesVec, parentSpeciesId, tickNow) {
     }
   }
 
-  // Otherwise, attach to nearest existing if close enough
   const { bestId, bestD } = findNearestSpeciesId(type, genesVec);
   if (bestId != null && bestD <= SPECIES_MERGE_DISTANCE) return bestId;
 
-  // Else create new species
-  const newId = createSpecies(type, genesVec, tickNow);
-  return newId ?? (bestId ?? parentSpeciesId ?? null);
+  return createSpecies(type, genesVec, tickNow);
 }
 
-function updateSpeciesStats() {
-  // Recompute counts + centroid by incremental averaging
-  for (const sp of speciesDB.values()) {
-    sp.count = 0;
-  }
+function updateSpeciesStats(ticksNow) {
+  for (const sp of speciesDB.values()) sp.count = 0;
 
-  // accumulate sums
-  const sums = new Map(); // id -> [sum...]
-  function addTo(id, vec) {
+  const sums = new Map();
+  const addTo = (id, vec) => {
     if (id == null || !speciesDB.has(id)) return;
     const sp = speciesDB.get(id);
     sp.count++;
     if (!sums.has(id)) sums.set(id, new Array(vec.length).fill(0));
     const s = sums.get(id);
     for (let i = 0; i < vec.length; i++) s[i] += vec[i];
-  }
+  };
 
   for (const a of grazers) addTo(a.speciesId, geneVector(a.g));
   for (const a of hunters) addTo(a.speciesId, geneVector(a.g));
 
-  // update centroids
   for (const [id, sum] of sums.entries()) {
     const sp = speciesDB.get(id);
     if (!sp || sp.count <= 0) continue;
-    for (let i = 0; i < sum.length; i++) {
-      sp.centroid[i] = sum[i] / sp.count;
-    }
+    for (let i = 0; i < sum.length; i++) sp.centroid[i] = sum[i] / sp.count;
   }
 
-  // Garbage collect species that are extinct for long enough
-  // (keeps DB tidy)
+  // garbage collect extinct species (optional cleanup)
   const EXTINCT_FOR_TICKS = 3500;
   for (const [id, sp] of speciesDB.entries()) {
     if (sp.count > 0) continue;
-    if (ticks - sp.createdTick > EXTINCT_FOR_TICKS) {
-      speciesDB.delete(id);
-    }
+    if (ticksNow - sp.createdTick > EXTINCT_FOR_TICKS) speciesDB.delete(id);
   }
 }
 
@@ -347,8 +473,8 @@ class Agent {
   cloneMutated(tickNow) {
     const ng = { ...this.g };
     for (const k of Object.keys(ng)) {
-      if (Math.random() < MUT_RATE) {
-        const delta = (Math.random() * 2 - 1) * MUT_STRENGTH;
+      if (Math.random() < settings.mutRate) {
+        const delta = (Math.random() * 2 - 1) * settings.mutStrength;
         ng[k] = clamp(ng[k] + delta, 0, 1);
       }
     }
@@ -374,18 +500,13 @@ let grazers = [];
 let hunters = [];
 let paused = false;
 
-// Initialize starting species (one per type)
+// Initialize starting species
 function initSpecies() {
   speciesDB.clear();
   nextSpeciesId = 1;
 
-  // Seed temporary gene vectors for the two starters
-  const gSeed = geneVector({
-    speed: 0.45, turn: 0.40, greed: 0.55, caution: 0.40, bite: 0.40, size: 0.25
-  });
-  const hSeed = geneVector({
-    speed: 0.50, turn: 0.45, greed: 0.45, caution: 0.35, bite: 0.55, size: 0.30
-  });
+  const gSeed = geneVector({ speed: 0.45, turn: 0.40, greed: 0.55, caution: 0.40, bite: 0.40, size: 0.25 });
+  const hSeed = geneVector({ speed: 0.50, turn: 0.45, greed: 0.45, caution: 0.35, bite: 0.55, size: 0.30 });
 
   createSpecies("g", gSeed, 0);
   createSpecies("h", hSeed, 0);
@@ -397,21 +518,11 @@ function resetSim() {
   resetPlants();
   initSpecies();
 
-  // Create starters and assign them to the initial species for their type
   const gFirstId = [...speciesDB.values()].find(s => s.type === "g")?.id ?? null;
   const hFirstId = [...speciesDB.values()].find(s => s.type === "h")?.id ?? null;
 
-  for (let i = 0; i < START_GRAZERS; i++) {
-    const a = new Agent("g", rand(W()), rand(H()), null, gFirstId);
-    grazers.push(a);
-  }
-  for (let i = 0; i < START_HUNTERS; i++) {
-    const a = new Agent("h", rand(W()), rand(H()), null, hFirstId);
-    hunters.push(a);
-  }
-
-  ctx.fillStyle = "#06090d";
-  ctx.fillRect(0, 0, W(), H());
+  for (let i = 0; i < START_GRAZERS; i++) grazers.push(new Agent("g", rand(W()), rand(H()), null, gFirstId));
+  for (let i = 0; i < START_HUNTERS; i++) hunters.push(new Agent("h", rand(W()), rand(H()), null, hFirstId));
 }
 resetSim();
 
@@ -433,14 +544,10 @@ function wander(agent) {
 function move(agent) {
   const size = agent.g.size;
 
-  // speed tradeoff: bigger = slower
   const spBase = SPEED_MIN + agent.g.speed * (SPEED_MAX - SPEED_MIN);
   const sp = spBase * (1.12 - 0.55 * size);
 
-  // move cost: bigger = more expensive
   const sizeCost = 0.65 + size * 1.10;
-
-  // density pressure
   const pressure = densityPressure();
   const crowdCost = 1 + pressure * 1.6;
 
@@ -469,14 +576,9 @@ function grazerStep(g) {
     const sx = g.x + Math.cos(ang) * vision;
     const sy = g.y + Math.sin(ang) * vision;
     const p = samplePlant((sx + W()) % W(), (sy + H()) % H());
-    if (p > bestScore) {
-      bestScore = p;
-      bestX = (sx + W()) % W();
-      bestY = (sy + H()) % H();
-    }
+    if (p > bestScore) { bestScore = p; bestX = (sx + W()) % W(); bestY = (sy + H()) % H(); }
   }
 
-  // avoid nearest hunter
   let nearestH = null;
   let nd = Infinity;
   for (const h of hunters) {
@@ -495,12 +597,10 @@ function grazerStep(g) {
     if (Math.random() < 0.18 * (1 - g.g.greed)) wander(g);
   }
 
-  // eat plant underfoot
   const bite = PLANT_EAT_RATE * (0.65 + g.g.greed) * (0.75 + g.g.size * 0.85);
   const eaten = eatPlantAt(g.x, g.y, bite);
   g.energy += eaten * 0.78;
 
-  // baseline hunger (bigger costs more)
   g.energy -= 0.00055 * (0.7 + g.g.size * 1.3) * (1 + densityPressure() * 1.1);
 
   move(g);
@@ -513,10 +613,7 @@ function hunterStep(h) {
 
   for (const g of grazers) {
     const d = dist2(h.x, h.y, g.x, g.y);
-    if (d < bestD) {
-      bestD = d;
-      target = g;
-    }
+    if (d < bestD) { bestD = d; target = g; }
   }
 
   if (target) {
@@ -533,17 +630,15 @@ function hunterStep(h) {
     if (Math.random() < 0.60) wander(h);
   }
 
-  // hunters have higher baseline hunger; big hunters pay more
   h.energy -= 0.00085 * (0.85 + h.g.size * 1.4) * (1 + densityPressure() * 1.2);
 
   move(h);
 }
 
 // =======================
-// LIFE / REPRODUCTION (SOFT CONTROL)
+// LIFE / REPRODUCTION
 // =======================
-function handleLife(list) {
-  // death + nutrient return
+function handleLife(list, tickNow) {
   for (let i = list.length - 1; i >= 0; i--) {
     const a = list[i];
     if (a.energy <= 0 || a.age > 26000) {
@@ -552,7 +647,6 @@ function handleLife(list) {
     }
   }
 
-  // reproduction (slow + density-limited + resource-limited)
   const pressure = densityPressure();
   const reproSlow = 0.06;
   const popPenalty = 1 - pressure;
@@ -575,14 +669,42 @@ function handleLife(list) {
     if (Math.random() < p) {
       a.energy -= REPRO_COST * (0.85 + a.g.size * 0.55);
       a.reproCooldown = REPRO_COOLDOWN_TICKS;
-      list.push(a.cloneMutated(ticks));
+      list.push(a.cloneMutated(tickNow));
     }
   }
 }
 
 // =======================
-// DRAW
+// DRAW (with camera transform)
 // =======================
+function clearFrame() {
+  // Clear in SCREEN space first
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+  const w = W(), h = H();
+  if (!drawTrailsEl.checked) {
+    ctx.fillStyle = "#06090d";
+    ctx.fillRect(0, 0, w, h);
+  } else {
+    ctx.fillStyle = "rgba(6,9,13,0.14)";
+    ctx.fillRect(0, 0, w, h);
+  }
+
+  ctx.restore();
+}
+
+function applyCameraTransform() {
+  const cx = W() / 2;
+  const cy = H() / 2;
+
+  // world -> screen:
+  // translate to center, scale, then translate world so cam.x/y is centered
+  ctx.translate(cx, cy);
+  ctx.scale(cam.scale, cam.scale);
+  ctx.translate(-cam.x, -cam.y);
+}
+
 function drawHeatmap() {
   const w = W(), h = H();
   const cellW = w / GRID, cellH = h / GRID;
@@ -598,7 +720,6 @@ function drawHeatmap() {
 }
 
 function drawAgents() {
-  // grazers
   for (const g of grazers) {
     const sp = speciesDB.get(g.speciesId);
     const color = sp?.color ?? "rgb(120,200,140)";
@@ -610,7 +731,6 @@ function drawAgents() {
     ctx.fill();
   }
 
-  // hunters
   for (const h of hunters) {
     const sp = speciesDB.get(h.speciesId);
     const color = sp?.color ?? "rgb(210,90,90)";
@@ -624,18 +744,15 @@ function drawAgents() {
 }
 
 function draw() {
-  const w = W(), h = H();
+  clearFrame();
 
-  if (!drawTrailsEl.checked) {
-    ctx.fillStyle = "#06090d";
-    ctx.fillRect(0, 0, w, h);
-  } else {
-    ctx.fillStyle = "rgba(6,9,13,0.14)";
-    ctx.fillRect(0, 0, w, h);
-  }
+  ctx.save();
+  applyCameraTransform();
 
   if (drawHeatEl.checked) drawHeatmap();
   drawAgents();
+
+  ctx.restore();
 }
 
 // =======================
@@ -643,7 +760,7 @@ function draw() {
 // =======================
 let ticks = 0;
 
-function topSpeciesList(type, n = 5) {
+function topSpeciesList(type, n = 4) {
   const arr = [];
   for (const sp of speciesDB.values()) {
     if (sp.type !== type) continue;
@@ -654,14 +771,13 @@ function topSpeciesList(type, n = 5) {
 }
 
 function fmtSpeciesLine(sp) {
-  // show name + count
   return `${sp.name}: ${sp.count}`;
 }
 
 function step() {
   if (!paused) {
     frameCounter++;
-    const doTick = (frameCounter % TICK_EVERY_N_FRAMES === 0);
+    const doTick = (frameCounter % settings.tickEvery === 0);
 
     if (doTick) {
       regenPlants();
@@ -669,11 +785,10 @@ function step() {
       for (const g of grazers) grazerStep(g);
       for (const h of hunters) hunterStep(h);
 
-      handleLife(grazers);
-      handleLife(hunters);
+      handleLife(grazers, ticks);
+      handleLife(hunters, ticks);
 
-      // Update species stats occasionally (not every tick)
-      if (ticks % 25 === 0) updateSpeciesStats();
+      if (ticks % 25 === 0) updateSpeciesStats(ticks);
 
       ticks++;
 
@@ -691,7 +806,7 @@ function step() {
 Avg size: grazers ${sizeAvg(grazers)} | hunters ${sizeAvg(hunters)}
 Avg genes (grazers): speed ${avg(grazers, "speed")} greed ${avg(grazers, "greed")} caution ${avg(grazers, "caution")}
 Avg genes (hunters): speed ${avg(hunters, "speed")} bite  ${avg(hunters, "bite")}
-Pressure: ${densityPressure().toFixed(2)} | Plants regen: ${PLANT_GROWTH} | Mutation: ${MUT_RATE}
+Pressure: ${densityPressure().toFixed(2)} | Plant growth: ${settings.plantGrowth.toFixed(3)} | Mutation: ${settings.mutRate.toFixed(2)} / ${settings.mutStrength.toFixed(2)} | Speciation: ${settings.speciesSplit.toFixed(2)}
 
 Top grazer species:
 ${gTop.length ? gTop.map(fmtSpeciesLine).join("\n") : "—"}
@@ -708,7 +823,7 @@ ${hTop.length ? hTop.map(fmtSpeciesLine).join("\n") : "—"}`;
 requestAnimationFrame(step);
 
 // =======================
-// UI
+// UI buttons
 // =======================
 pauseBtn.addEventListener("click", () => {
   paused = !paused;
@@ -718,5 +833,7 @@ pauseBtn.addEventListener("click", () => {
 resetBtn.addEventListener("click", () => {
   paused = false;
   pauseBtn.textContent = "Pause";
+  ticks = 0;
+  frameCounter = 0;
   resetSim();
 });
