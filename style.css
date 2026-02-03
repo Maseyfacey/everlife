@@ -11,11 +11,11 @@ body{
 header{
   padding:14px 16px 10px;
   border-bottom:1px solid #1a2330;
-  position:sticky;
-  top:0;
-  background:rgba(11,15,20,.92);
-  backdrop-filter: blur(10px);
-  z-index:3;
+  position:relative;   /* was: sticky */
+  top:auto;            /* was: 0 */
+  background:#0b0f14;  /* remove the blur overlay look */
+  backdrop-filter:none;
+  z-index:1;
 }
 
 h1{ margin:0 0 10px; font-size:18px; font-weight:750; }
