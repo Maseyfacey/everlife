@@ -1,35 +1,44 @@
-// Slow-paced evolving ecosystem (plants -> grazers -> hunters)
-// + SIZE gene (visible + affects speed/cost)
-// + SPECIES splitting (auto-naming + stable colors)
-// + NO hard population caps (soft pressure prevents runaway growth)
-// + UI dials saved in localStorage
-// + Infinite zoom + pan (visual only)
+// Ecosystem sim (browser-only, GitHub Pages friendly)
+// + Legend panel w/ click-to-follow species
+// + Species labels (only at high zoom)
+// + Autosave WORLD state + “offline fast-forward” on reopen
+//
+// Note: A GitHub Pages site cannot truly run while closed.
+// This saves state + simulates elapsed time when you reopen.
 
 const canvas = document.getElementById("c");
 const ctx = canvas.getContext("2d", { alpha: false });
 
+// UI
 const statsEl = document.getElementById("stats");
 const pauseBtn = document.getElementById("pauseBtn");
 const resetBtn = document.getElementById("resetBtn");
 const resetViewBtn = document.getElementById("resetViewBtn");
+const unfollowBtn = document.getElementById("unfollowBtn");
+const clearSaveBtn = document.getElementById("clearSaveBtn");
+
 const drawTrailsEl = document.getElementById("drawTrails");
 const drawHeatEl = document.getElementById("drawHeat");
+const showLabelsEl = document.getElementById("showLabels");
 const autosaveEl = document.getElementById("autosave");
 
-// sliders
 const tickEveryEl = document.getElementById("tickEvery");
 const plantGrowthEl = document.getElementById("plantGrowth");
 const mutRateEl = document.getElementById("mutRate");
 const mutStrengthEl = document.getElementById("mutStrength");
 const speciesSplitEl = document.getElementById("speciesSplit");
 
-// slider values text
 const v_tickEvery = document.getElementById("v_tickEvery");
 const v_plantGrowth = document.getElementById("v_plantGrowth");
 const v_mutRate = document.getElementById("v_mutRate");
 const v_mutStrength = document.getElementById("v_mutStrength");
 const v_speciesSplit = document.getElementById("v_speciesSplit");
 
+const legendListEl = document.getElementById("legendList");
+const tabG = document.getElementById("tabG");
+const tabH = document.getElementById("tabH");
+
+// Canvas sizing
 function fitCanvas() {
   const rect = canvas.getBoundingClientRect();
   const dpr = Math.max(1, Math.floor(window.devicePixelRatio || 1));
@@ -43,6 +52,7 @@ fitCanvas();
 const W = () => canvas.getBoundingClientRect().width;
 const H = () => canvas.getBoundingClientRect().height;
 
+// Utils
 const rand = (a = 1, b = 0) => Math.random() * (a - b) + b;
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 const dist2 = (ax, ay, bx, by) => (ax - bx) ** 2 + (ay - by) ** 2;
@@ -54,9 +64,10 @@ function wrapPos(o) {
 }
 
 // =======================
-// SETTINGS (UI + SAVING)
+// SETTINGS SAVE (SLIDERS)
 // =======================
-const STORAGE_KEY = "ecosim_settings_v1";
+const SETTINGS_KEY = "ecosim_settings_v2";
+const WORLD_KEY = "ecosim_world_v2";
 
 const defaults = {
   tickEvery: 2,
@@ -71,24 +82,24 @@ let settings = { ...defaults };
 
 function loadSettings() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(SETTINGS_KEY);
     if (!raw) return;
-    const obj = JSON.parse(raw);
-    settings = { ...defaults, ...obj };
-  } catch { /* ignore */ }
+    settings = { ...defaults, ...JSON.parse(raw) };
+  } catch {}
 }
 
 function saveSettings() {
   if (!autosaveEl.checked) return;
-  const obj = {
-    tickEvery: settings.tickEvery,
-    plantGrowth: settings.plantGrowth,
-    mutRate: settings.mutRate,
-    mutStrength: settings.mutStrength,
-    speciesSplit: settings.speciesSplit,
-    autosave: autosaveEl.checked,
-  };
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(obj)); } catch { /* ignore */ }
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+      tickEvery: settings.tickEvery,
+      plantGrowth: settings.plantGrowth,
+      mutRate: settings.mutRate,
+      mutStrength: settings.mutStrength,
+      speciesSplit: settings.speciesSplit,
+      autosave: autosaveEl.checked,
+    }));
+  } catch {}
 }
 
 function syncUIFromSettings() {
@@ -106,7 +117,7 @@ function syncUIFromSettings() {
   v_speciesSplit.textContent = settings.speciesSplit.toFixed(2);
 }
 
-function applyUIHandlers() {
+function bindSettingHandlers() {
   autosaveEl.addEventListener("change", () => {
     settings.autosave = autosaveEl.checked;
     saveSettings();
@@ -117,25 +128,21 @@ function applyUIHandlers() {
     v_tickEvery.textContent = String(settings.tickEvery);
     saveSettings();
   });
-
   plantGrowthEl.addEventListener("input", () => {
     settings.plantGrowth = parseFloat(plantGrowthEl.value);
     v_plantGrowth.textContent = settings.plantGrowth.toFixed(3);
     saveSettings();
   });
-
   mutRateEl.addEventListener("input", () => {
     settings.mutRate = parseFloat(mutRateEl.value);
     v_mutRate.textContent = settings.mutRate.toFixed(2);
     saveSettings();
   });
-
   mutStrengthEl.addEventListener("input", () => {
     settings.mutStrength = parseFloat(mutStrengthEl.value);
     v_mutStrength.textContent = settings.mutStrength.toFixed(2);
     saveSettings();
   });
-
   speciesSplitEl.addEventListener("input", () => {
     settings.speciesSplit = parseFloat(speciesSplitEl.value);
     v_speciesSplit.textContent = settings.speciesSplit.toFixed(2);
@@ -145,41 +152,26 @@ function applyUIHandlers() {
 
 loadSettings();
 syncUIFromSettings();
-applyUIHandlers();
+bindSettingHandlers();
 
 // =======================
-// CAMERA (INFINITE ZOOM + PAN)
+// CAMERA (infinite zoom/pan)
 // =======================
-const cam = {
-  x: W() / 2,
-  y: H() / 2,
-  scale: 1.0,
-};
-
+const cam = { x: 0, y: 0, scale: 1.0 };
 function resetView() {
   cam.x = W() / 2;
   cam.y = H() / 2;
   cam.scale = 1.0;
 }
 resetViewBtn.addEventListener("click", resetView);
+canvas.addEventListener("dblclick", (e) => { e.preventDefault(); resetView(); });
 
-canvas.addEventListener("dblclick", (e) => {
-  e.preventDefault();
-  resetView();
-});
-
-// Convert screen coords (canvas CSS pixels) to world coords (sim coords)
 function screenToWorld(sx, sy) {
-  // world = cam center + (screen-center)/scale
-  const cx = W() / 2;
-  const cy = H() / 2;
-  return {
-    x: cam.x + (sx - cx) / cam.scale,
-    y: cam.y + (sy - cy) / cam.scale
-  };
+  const cx = W() / 2, cy = H() / 2;
+  return { x: cam.x + (sx - cx) / cam.scale, y: cam.y + (sy - cy) / cam.scale };
 }
 
-// Wheel zoom centered at mouse position
+// wheel zoom at mouse
 canvas.addEventListener("wheel", (e) => {
   e.preventDefault();
   const rect = canvas.getBoundingClientRect();
@@ -187,51 +179,36 @@ canvas.addEventListener("wheel", (e) => {
   const my = e.clientY - rect.top;
 
   const before = screenToWorld(mx, my);
-
-  // infinite zoom factor
   const factor = Math.pow(1.0015, -e.deltaY);
   cam.scale = clamp(cam.scale * factor, 0.00001, 1e9);
-
   const after = screenToWorld(mx, my);
 
-  // keep the point under the mouse stable
   cam.x += (before.x - after.x);
   cam.y += (before.y - after.y);
 }, { passive: false });
 
-// Drag pan
-let dragging = false;
-let lastX = 0, lastY = 0;
-
-canvas.addEventListener("mousedown", (e) => {
-  dragging = true;
-  lastX = e.clientX;
-  lastY = e.clientY;
-});
-
+// drag pan
+let dragging = false, lastX = 0, lastY = 0;
+canvas.addEventListener("mousedown", (e) => { dragging = true; lastX = e.clientX; lastY = e.clientY; });
 window.addEventListener("mouseup", () => dragging = false);
-
 window.addEventListener("mousemove", (e) => {
   if (!dragging) return;
   const dx = e.clientX - lastX;
   const dy = e.clientY - lastY;
-  lastX = e.clientX;
-  lastY = e.clientY;
-
-  // pan in world units
+  lastX = e.clientX; lastY = e.clientY;
   cam.x -= dx / cam.scale;
   cam.y -= dy / cam.scale;
 });
 
 // =======================
-// PLANTS
+// WORLD: plants
 // =======================
 const GRID = 120;
 const PLANT_MAX = 1.0;
 const PLANT_EAT_RATE = 0.08;
 
 let plant = new Float32Array(GRID * GRID);
-function idx(ix, iy) { return iy * GRID + ix; }
+const idx = (ix, iy) => iy * GRID + ix;
 
 function samplePlant(x, y) {
   const w = W(), h = H();
@@ -267,20 +244,16 @@ function eatPlantAt(x, y, amount) {
 
 function regenPlants() {
   const g = settings.plantGrowth;
-  for (let i = 0; i < plant.length; i++) {
-    plant[i] = clamp(plant[i] + g * (1 - plant[i]), 0, PLANT_MAX);
-  }
+  for (let i = 0; i < plant.length; i++) plant[i] = clamp(plant[i] + g * (1 - plant[i]), 0, PLANT_MAX);
 }
 
 function resetPlants() {
   plant.fill(0);
-  for (let i = 0; i < 350; i++) {
-    addPlant(rand(W()), rand(H()), rand(0.8, 0.15));
-  }
+  for (let i = 0; i < 350; i++) addPlant(rand(W()), rand(H()), rand(0.8, 0.15));
 }
 
 // =======================
-// SIM CONSTANTS
+// WORLD: sim constants
 // =======================
 const REPRO_THRESHOLD = 1.35;
 const REPRO_COST = 0.70;
@@ -297,32 +270,27 @@ const HUNTER_VISION = 34;
 const EAT_RADIUS_BASE = 6.5;
 const HUNT_DAMAGE = 0.28;
 
-const START_GRAZERS = 1;
-const START_HUNTERS = 1;
-
-// Soft population control
 const TARGET_GRAZERS = 120;
 const TARGET_HUNTERS = 55;
 
-function sigmoid01(x) { return 1 / (1 + Math.exp(-x)); }
+const START_GRAZERS = 1;
+const START_HUNTERS = 1;
 
+function sigmoid01(x) { return 1 / (1 + Math.exp(-x)); }
 function densityPressure() {
-  const g = grazers.length;
-  const h = hunters.length;
+  const g = grazers.length, h = hunters.length;
   const gP = sigmoid01((g - TARGET_GRAZERS) / 25);
   const hP = sigmoid01((h - TARGET_HUNTERS) / 18);
   return clamp(0.55 * gP + 0.45 * hP, 0, 1);
 }
-
-function localPlantOk(x, y) { return samplePlant(x, y) > 0.20; }
-
-function preyAbundant() { return grazers.length > Math.max(18, hunters.length * 1.6); }
+const localPlantOk = (x, y) => samplePlant(x, y) > 0.20;
+const preyAbundant = () => grazers.length > Math.max(18, hunters.length * 1.6);
 
 // =======================
-// SPECIES SYSTEM
+// SPECIES
 // =======================
 let nextSpeciesId = 1;
-const speciesDB = new Map(); // id -> { id,type,name,color,count,centroid,createdTick }
+const speciesDB = new Map(); // id -> {id,type,name,color,count,centroid,createdTick}
 
 const syllA = ["ka","zu","mi","ra","to","shi","na","lo","ve","xi","qu","ha","yo","ti","sa","no"];
 const syllB = ["rin","mar","tuk","ven","sol","fer","lan","koi","zen","dor","pik","moi","tes","vex"];
@@ -339,18 +307,13 @@ function hsvToRgbString(hDeg, s, v) {
   const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
   const m = v - c;
   let r = 0, g = 0, b = 0;
-
   if (h < 60) { r = c; g = x; b = 0; }
   else if (h < 120) { r = x; g = c; b = 0; }
   else if (h < 180) { r = 0; g = c; b = x; }
   else if (h < 240) { r = 0; g = x; b = c; }
   else if (h < 300) { r = x; g = 0; b = c; }
   else { r = c; g = 0; b = x; }
-
-  const R = Math.floor((r + m) * 255);
-  const G = Math.floor((g + m) * 255);
-  const B = Math.floor((b + m) * 255);
-  return `rgb(${R}, ${G}, ${B})`;
+  return `rgb(${Math.floor((r+m)*255)}, ${Math.floor((g+m)*255)}, ${Math.floor((b+m)*255)})`;
 }
 
 function makeColor(type) {
@@ -360,16 +323,10 @@ function makeColor(type) {
   return hsvToRgbString(h, s, v);
 }
 
-function geneVector(g) {
-  return [g.speed, g.turn, g.greed, g.caution, g.bite, g.size];
-}
-
+function geneVector(g) { return [g.speed, g.turn, g.greed, g.caution, g.bite, g.size]; }
 function vecDist(a, b) {
   let s = 0;
-  for (let i = 0; i < a.length; i++) {
-    const d = a[i] - b[i];
-    s += d * d;
-  }
+  for (let i = 0; i < a.length; i++) { const d = a[i] - b[i]; s += d*d; }
   return Math.sqrt(s);
 }
 
@@ -387,8 +344,7 @@ function createSpecies(type, fromGenesVec, tickNow) {
 }
 
 function findNearestSpeciesId(type, genesVec) {
-  let bestId = null;
-  let bestD = Infinity;
+  let bestId = null, bestD = Infinity;
   for (const sp of speciesDB.values()) {
     if (sp.type !== type) continue;
     const d = vecDist(genesVec, sp.centroid);
@@ -398,27 +354,27 @@ function findNearestSpeciesId(type, genesVec) {
 }
 
 function assignSpeciesAtBirth(type, genesVec, parentSpeciesId, tickNow) {
-  const SPECIES_SPLIT_DISTANCE = settings.speciesSplit;
-  const SPECIES_MERGE_DISTANCE = Math.max(0.12, settings.speciesSplit * 0.60);
+  const SPLIT = settings.speciesSplit;
+  const MERGE = Math.max(0.12, settings.speciesSplit * 0.60);
 
   if (parentSpeciesId != null && speciesDB.has(parentSpeciesId)) {
-    const parentSp = speciesDB.get(parentSpeciesId);
-    if (parentSp.type === type) {
-      const d = vecDist(genesVec, parentSp.centroid);
-      if (d <= SPECIES_SPLIT_DISTANCE) return parentSpeciesId;
+    const p = speciesDB.get(parentSpeciesId);
+    if (p.type === type) {
+      const d = vecDist(genesVec, p.centroid);
+      if (d <= SPLIT) return parentSpeciesId;
     }
   }
 
   const { bestId, bestD } = findNearestSpeciesId(type, genesVec);
-  if (bestId != null && bestD <= SPECIES_MERGE_DISTANCE) return bestId;
+  if (bestId != null && bestD <= MERGE) return bestId;
 
   return createSpecies(type, genesVec, tickNow);
 }
 
 function updateSpeciesStats(ticksNow) {
   for (const sp of speciesDB.values()) sp.count = 0;
-
   const sums = new Map();
+
   const addTo = (id, vec) => {
     if (id == null || !speciesDB.has(id)) return;
     const sp = speciesDB.get(id);
@@ -437,7 +393,7 @@ function updateSpeciesStats(ticksNow) {
     for (let i = 0; i < sum.length; i++) sp.centroid[i] = sum[i] / sp.count;
   }
 
-  // garbage collect extinct species (optional cleanup)
+  // cleanup long-extinct
   const EXTINCT_FOR_TICKS = 3500;
   for (const [id, sp] of speciesDB.entries()) {
     if (sp.count > 0) continue;
@@ -450,7 +406,7 @@ function updateSpeciesStats(ticksNow) {
 // =======================
 class Agent {
   constructor(type, x, y, genes, speciesId = null) {
-    this.type = type; // "g" or "h"
+    this.type = type;
     this.x = x; this.y = y;
     this.vx = 0; this.vy = 0;
     this.a = rand(Math.PI * 2);
@@ -479,16 +435,8 @@ class Agent {
       }
     }
 
-    const genesVec = geneVector(ng);
-    const babySpeciesId = assignSpeciesAtBirth(this.type, genesVec, this.speciesId, tickNow);
-
-    const baby = new Agent(
-      this.type,
-      this.x + rand(12, -12),
-      this.y + rand(12, -12),
-      ng,
-      babySpeciesId
-    );
+    const babySpeciesId = assignSpeciesAtBirth(this.type, geneVector(ng), this.speciesId, tickNow);
+    const baby = new Agent(this.type, this.x + rand(12, -12), this.y + rand(12, -12), ng, babySpeciesId);
     baby.energy = 0.65;
     baby.a = rand(Math.PI * 2);
     baby.reproCooldown = REPRO_COOLDOWN_TICKS;
@@ -498,36 +446,136 @@ class Agent {
 
 let grazers = [];
 let hunters = [];
-let paused = false;
 
-// Initialize starting species
-function initSpecies() {
+// =======================
+// LEGEND + FOLLOW
+// =======================
+let legendMode = "g"; // "g" or "h"
+let followedSpeciesId = null;
+
+tabG.addEventListener("click", () => { legendMode = "g"; tabG.classList.add("active"); tabH.classList.remove("active"); renderLegend(); });
+tabH.addEventListener("click", () => { legendMode = "h"; tabH.classList.add("active"); tabG.classList.remove("active"); renderLegend(); });
+
+unfollowBtn.addEventListener("click", () => {
+  followedSpeciesId = null;
+  renderLegend();
+});
+
+function topSpecies(type) {
+  const arr = [];
+  for (const sp of speciesDB.values()) if (sp.type === type && sp.count > 0) arr.push(sp);
+  arr.sort((a, b) => b.count - a.count);
+  return arr;
+}
+
+function renderLegend() {
+  const list = topSpecies(legendMode);
+  legendListEl.innerHTML = "";
+
+  if (list.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "spMeta";
+    empty.textContent = "No living species yet.";
+    legendListEl.appendChild(empty);
+    return;
+  }
+
+  for (const sp of list.slice(0, 40)) {
+    const row = document.createElement("div");
+    row.className = "spRow" + (sp.id === followedSpeciesId ? " following" : "");
+    row.title = "Click to follow";
+
+    const left = document.createElement("div");
+    left.className = "spLeft";
+
+    const sw = document.createElement("div");
+    sw.className = "swatch";
+    sw.style.background = sp.color;
+
+    const name = document.createElement("div");
+    name.className = "spName";
+    name.textContent = sp.name;
+
+    left.appendChild(sw);
+    left.appendChild(name);
+
+    const meta = document.createElement("div");
+    meta.className = "spMeta";
+    meta.textContent = String(sp.count);
+
+    row.appendChild(left);
+    row.appendChild(meta);
+
+    row.addEventListener("click", () => {
+      followedSpeciesId = sp.id;
+      legendMode = sp.type;
+      tabG.classList.toggle("active", legendMode === "g");
+      tabH.classList.toggle("active", legendMode === "h");
+      renderLegend();
+    });
+
+    legendListEl.appendChild(row);
+  }
+}
+
+function speciesCenter(speciesId) {
+  let sx = 0, sy = 0, n = 0;
+  const arr = [...grazers, ...hunters];
+  for (const a of arr) {
+    if (a.speciesId !== speciesId) continue;
+    sx += a.x; sy += a.y; n++;
+  }
+  if (!n) return null;
+  return { x: sx / n, y: sy / n, n };
+}
+
+function followCamera() {
+  if (followedSpeciesId == null) return;
+  const c = speciesCenter(followedSpeciesId);
+  if (!c) return;
+
+  // smooth follow (lerp)
+  const t = 0.08;
+  cam.x = cam.x + (c.x - cam.x) * t;
+  cam.y = cam.y + (c.y - cam.y) * t;
+}
+
+// =======================
+// INIT / RESET
+// =======================
+let nextSpeciesInitDone = false;
+
+function initSpecies(tickNow) {
   speciesDB.clear();
   nextSpeciesId = 1;
 
   const gSeed = geneVector({ speed: 0.45, turn: 0.40, greed: 0.55, caution: 0.40, bite: 0.40, size: 0.25 });
   const hSeed = geneVector({ speed: 0.50, turn: 0.45, greed: 0.45, caution: 0.35, bite: 0.55, size: 0.30 });
 
-  createSpecies("g", gSeed, 0);
-  createSpecies("h", hSeed, 0);
+  createSpecies("g", gSeed, tickNow);
+  createSpecies("h", hSeed, tickNow);
+  nextSpeciesInitDone = true;
 }
 
-function resetSim() {
+function resetSimFresh() {
   grazers = [];
   hunters = [];
   resetPlants();
-  initSpecies();
+  initSpecies(0);
 
   const gFirstId = [...speciesDB.values()].find(s => s.type === "g")?.id ?? null;
   const hFirstId = [...speciesDB.values()].find(s => s.type === "h")?.id ?? null;
 
   for (let i = 0; i < START_GRAZERS; i++) grazers.push(new Agent("g", rand(W()), rand(H()), null, gFirstId));
   for (let i = 0; i < START_HUNTERS; i++) hunters.push(new Agent("h", rand(W()), rand(H()), null, hFirstId));
+
+  resetView();
+  followedSpeciesId = null;
+  renderLegend();
 }
-resetSim();
 
 // =======================
-// STEERING / MOVING
+// MOVEMENT / BEHAVIOR
 // =======================
 function steerToward(agent, tx, ty, strength) {
   const angTo = Math.atan2(ty - agent.y, tx - agent.x);
@@ -536,21 +584,17 @@ function steerToward(agent, tx, ty, strength) {
   const tr = (0.05 + agent.g.turn * TURN_RATE_BASE) * strength;
   agent.a += clamp(da, -tr, tr);
 }
-
 function wander(agent) {
   agent.a += (Math.random() * 2 - 1) * (0.012 + (1 - agent.g.turn) * 0.035);
 }
-
 function move(agent) {
   const size = agent.g.size;
-
   const spBase = SPEED_MIN + agent.g.speed * (SPEED_MAX - SPEED_MIN);
   const sp = spBase * (1.12 - 0.55 * size);
 
   const sizeCost = 0.65 + size * 1.10;
   const pressure = densityPressure();
   const crowdCost = 1 + pressure * 1.6;
-
   const cost = BASE_MOVE_COST * sizeCost * crowdCost * (0.85 + agent.g.speed * 0.9);
   agent.energy -= cost;
 
@@ -564,9 +608,6 @@ function move(agent) {
   if (agent.reproCooldown > 0) agent.reproCooldown--;
 }
 
-// =======================
-// BEHAVIOR
-// =======================
 function grazerStep(g) {
   const vision = GRAZER_VISION * (0.85 + (1 - g.g.size) * 0.35);
   let bestScore = -1, bestX = g.x, bestY = g.y;
@@ -579,8 +620,7 @@ function grazerStep(g) {
     if (p > bestScore) { bestScore = p; bestX = (sx + W()) % W(); bestY = (sy + H()) % H(); }
   }
 
-  let nearestH = null;
-  let nd = Infinity;
+  let nearestH = null, nd = Infinity;
   for (const h of hunters) {
     const d = dist2(g.x, g.y, h.x, h.y);
     if (d < nd) { nd = d; nearestH = h; }
@@ -602,14 +642,12 @@ function grazerStep(g) {
   g.energy += eaten * 0.78;
 
   g.energy -= 0.00055 * (0.7 + g.g.size * 1.3) * (1 + densityPressure() * 1.1);
-
   move(g);
 }
 
 function hunterStep(h) {
   const vision = HUNTER_VISION * (0.9 + (1 - h.g.size) * 0.20);
-  let target = null;
-  let bestD = vision * vision;
+  let target = null, bestD = vision * vision;
 
   for (const g of grazers) {
     const d = dist2(h.x, h.y, g.x, g.y);
@@ -618,7 +656,6 @@ function hunterStep(h) {
 
   if (target) {
     steerToward(h, target.x, target.y, 0.55 + h.g.bite * 0.95);
-
     const eatR = EAT_RADIUS_BASE + h.g.size * 5.5;
     if (bestD < eatR * eatR) {
       const dmg = HUNT_DAMAGE * (0.55 + h.g.bite) * (0.7 + h.g.size * 0.9);
@@ -631,13 +668,9 @@ function hunterStep(h) {
   }
 
   h.energy -= 0.00085 * (0.85 + h.g.size * 1.4) * (1 + densityPressure() * 1.2);
-
   move(h);
 }
 
-// =======================
-// LIFE / REPRODUCTION
-// =======================
 function handleLife(list, tickNow) {
   for (let i = list.length - 1; i >= 0; i--) {
     const a = list[i];
@@ -649,19 +682,15 @@ function handleLife(list, tickNow) {
 
   const pressure = densityPressure();
   const reproSlow = 0.06;
-  const popPenalty = 1 - pressure;
-  const baseChance = reproSlow * (0.25 + 0.75 * popPenalty);
+  const baseChance = reproSlow * (0.25 + 0.75 * (1 - pressure));
 
   for (let i = list.length - 1; i >= 0; i--) {
     const a = list[i];
     if (a.reproCooldown > 0) continue;
     if (a.energy <= REPRO_THRESHOLD) continue;
 
-    if (a.type === "g") {
-      if (!localPlantOk(a.x, a.y)) continue;
-    } else {
-      if (!preyAbundant()) continue;
-    }
+    if (a.type === "g") { if (!localPlantOk(a.x, a.y)) continue; }
+    else { if (!preyAbundant()) continue; }
 
     const sizePenalty = 1 - a.g.size * 0.55;
     const p = baseChance * sizePenalty;
@@ -675,13 +704,11 @@ function handleLife(list, tickNow) {
 }
 
 // =======================
-// DRAW (with camera transform)
+// DRAW (camera + optional labels)
 // =======================
 function clearFrame() {
-  // Clear in SCREEN space first
   ctx.save();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-
   const w = W(), h = H();
   if (!drawTrailsEl.checked) {
     ctx.fillStyle = "#06090d";
@@ -690,16 +717,11 @@ function clearFrame() {
     ctx.fillStyle = "rgba(6,9,13,0.14)";
     ctx.fillRect(0, 0, w, h);
   }
-
   ctx.restore();
 }
 
 function applyCameraTransform() {
-  const cx = W() / 2;
-  const cy = H() / 2;
-
-  // world -> screen:
-  // translate to center, scale, then translate world so cam.x/y is centered
+  const cx = W() / 2, cy = H() / 2;
   ctx.translate(cx, cy);
   ctx.scale(cam.scale, cam.scale);
   ctx.translate(-cam.x, -cam.y);
@@ -708,18 +730,16 @@ function applyCameraTransform() {
 function drawHeatmap() {
   const w = W(), h = H();
   const cellW = w / GRID, cellH = h / GRID;
-  for (let y = 0; y < GRID; y++) {
-    for (let x = 0; x < GRID; x++) {
-      const p = plant[idx(x, y)];
-      if (p <= 0.03) continue;
-      const v = Math.floor(26 + p * 120);
-      ctx.fillStyle = `rgb(18, ${v}, 40)`;
-      ctx.fillRect(x * cellW, y * cellH, cellW + 0.5, cellH + 0.5);
-    }
+  for (let y = 0; y < GRID; y++) for (let x = 0; x < GRID; x++) {
+    const p = plant[idx(x, y)];
+    if (p <= 0.03) continue;
+    const v = Math.floor(26 + p * 120);
+    ctx.fillStyle = `rgb(18, ${v}, 40)`;
+    ctx.fillRect(x * cellW, y * cellH, cellW + 0.5, cellH + 0.5);
   }
 }
 
-function drawAgents() {
+function drawAgents(withLabels) {
   for (const g of grazers) {
     const sp = speciesDB.get(g.speciesId);
     const color = sp?.color ?? "rgb(120,200,140)";
@@ -729,6 +749,8 @@ function drawAgents() {
     ctx.beginPath();
     ctx.arc(g.x, g.y, r, 0, Math.PI * 2);
     ctx.fill();
+
+    if (withLabels && sp) drawLabel(g.x, g.y, r, sp.name);
   }
 
   for (const h of hunters) {
@@ -740,38 +762,205 @@ function drawAgents() {
     ctx.beginPath();
     ctx.arc(h.x, h.y, r, 0, Math.PI * 2);
     ctx.fill();
+
+    if (withLabels && sp) drawLabel(h.x, h.y, r, sp.name);
   }
+}
+
+function drawLabel(x, y, r, text) {
+  // keep label size consistent on screen by scaling inverse to cam.scale
+  const inv = 1 / cam.scale;
+  const fontPx = clamp(12 * inv, 2.5, 10); // stays readable but not huge
+  ctx.save();
+  ctx.font = `${fontPx}px system-ui, -apple-system, Segoe UI, Roboto, Arial`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "bottom";
+  ctx.fillStyle = "rgba(0,0,0,0.55)";
+  ctx.fillText(text, x, y - (r + 6*inv));
+  ctx.fillStyle = "rgba(240,245,255,0.92)";
+  ctx.fillText(text, x, y - (r + 7.2*inv));
+  ctx.restore();
 }
 
 function draw() {
   clearFrame();
-
   ctx.save();
   applyCameraTransform();
 
   if (drawHeatEl.checked) drawHeatmap();
-  drawAgents();
+
+  const LABEL_ZOOM_THRESHOLD = 3.0;
+  const withLabels = showLabelsEl.checked && cam.scale >= LABEL_ZOOM_THRESHOLD;
+  drawAgents(withLabels);
 
   ctx.restore();
 }
 
 // =======================
-// MAIN LOOP
+// SAVE/LOAD WORLD (so it “keeps going”)
 // =======================
-let ticks = 0;
 
-function topSpeciesList(type, n = 4) {
-  const arr = [];
-  for (const sp of speciesDB.values()) {
-    if (sp.type !== type) continue;
-    if (sp.count > 0) arr.push(sp);
-  }
-  arr.sort((a, b) => b.count - a.count);
-  return arr.slice(0, n);
+// pack plants into Uint16 to keep storage smaller
+function packPlants() {
+  const out = new Uint16Array(plant.length);
+  for (let i = 0; i < plant.length; i++) out[i] = Math.floor(clamp(plant[i], 0, 1) * 65535);
+  return Array.from(out);
+}
+function unpackPlants(arr) {
+  const u = new Uint16Array(arr);
+  plant = new Float32Array(u.length);
+  for (let i = 0; i < u.length; i++) plant[i] = u[i] / 65535;
 }
 
-function fmtSpeciesLine(sp) {
-  return `${sp.name}: ${sp.count}`;
+function packAgent(a) {
+  // quantize genes to uint16-ish but store as ints (smaller + stable)
+  const q = (v) => Math.floor(clamp(v, 0, 1) * 65535);
+  return [
+    a.type,
+    a.x, a.y,
+    a.a,
+    a.energy,
+    a.age,
+    a.reproCooldown,
+    a.speciesId ?? null,
+    q(a.g.speed), q(a.g.turn), q(a.g.greed), q(a.g.caution), q(a.g.bite), q(a.g.size)
+  ];
+}
+function unpackAgent(row) {
+  const uq = (v) => clamp(v / 65535, 0, 1);
+  const type = row[0];
+  const a = new Agent(type, row[1], row[2], null, row[7]);
+  a.a = row[3];
+  a.energy = row[4];
+  a.age = row[5];
+  a.reproCooldown = row[6];
+  a.g = {
+    speed: uq(row[8]),
+    turn: uq(row[9]),
+    greed: uq(row[10]),
+    caution: uq(row[11]),
+    bite: uq(row[12]),
+    size: uq(row[13]),
+  };
+  return a;
+}
+
+function packSpecies() {
+  const arr = [];
+  for (const sp of speciesDB.values()) {
+    arr.push([
+      sp.id, sp.type, sp.name, sp.color,
+      sp.count,
+      sp.centroid,
+      sp.createdTick
+    ]);
+  }
+  return arr;
+}
+function unpackSpecies(arr) {
+  speciesDB.clear();
+  for (const row of arr) {
+    speciesDB.set(row[0], {
+      id: row[0],
+      type: row[1],
+      name: row[2],
+      color: row[3],
+      count: row[4],
+      centroid: row[5],
+      createdTick: row[6]
+    });
+  }
+  nextSpeciesId = Math.max(1, ...Array.from(speciesDB.keys())) + 1;
+}
+
+function saveWorld() {
+  if (!autosaveEl.checked) return;
+  try {
+    const payload = {
+      t: Date.now(),
+      ticks,
+      cam,
+      followedSpeciesId,
+      plant: packPlants(),
+      species: packSpecies(),
+      grazers: grazers.map(packAgent),
+      hunters: hunters.map(packAgent),
+    };
+    localStorage.setItem(WORLD_KEY, JSON.stringify(payload));
+  } catch {}
+}
+
+function loadWorld() {
+  try {
+    const raw = localStorage.getItem(WORLD_KEY);
+    if (!raw) return false;
+    const obj = JSON.parse(raw);
+
+    ticks = obj.ticks ?? 0;
+    if (obj.cam) {
+      cam.x = obj.cam.x ?? (W()/2);
+      cam.y = obj.cam.y ?? (H()/2);
+      cam.scale = obj.cam.scale ?? 1;
+    } else {
+      resetView();
+    }
+
+    followedSpeciesId = obj.followedSpeciesId ?? null;
+
+    if (obj.plant) unpackPlants(obj.plant);
+    if (obj.species) unpackSpecies(obj.species);
+
+    grazers = (obj.grazers ?? []).map(unpackAgent);
+    hunters = (obj.hunters ?? []).map(unpackAgent);
+
+    // Fast-forward based on time since last save
+    const last = obj.t ?? Date.now();
+    const elapsedSec = Math.max(0, (Date.now() - last) / 1000);
+
+    // Convert real seconds -> sim ticks (tune this)
+    const TICKS_PER_SECOND = 7; // makes “offline evolution” noticeable but not insane
+    let offlineTicks = Math.floor(elapsedSec * TICKS_PER_SECOND);
+
+    // Safety cap so you don’t freeze your browser if it was closed for days
+    offlineTicks = Math.min(offlineTicks, 25000);
+
+    if (!nextSpeciesInitDone && speciesDB.size === 0) initSpecies(ticks);
+
+    // run offline
+    for (let i = 0; i < offlineTicks; i++) tickOnce(true);
+
+    renderLegend();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Autosave every few seconds
+let lastSaveMs = 0;
+const SAVE_EVERY_MS = 4000;
+
+// =======================
+// MAIN TICK LOOP
+// =======================
+let paused = false;
+let frameCounter = 0;
+
+function tickOnce(isOffline = false) {
+  regenPlants();
+
+  for (const g of grazers) grazerStep(g);
+  for (const h of hunters) hunterStep(h);
+
+  handleLife(grazers, ticks);
+  handleLife(hunters, ticks);
+
+  if (ticks % 25 === 0) {
+    updateSpeciesStats(ticks);
+    if (!isOffline) renderLegend();
+  }
+
+  ticks++;
 }
 
 function step() {
@@ -780,50 +969,53 @@ function step() {
     const doTick = (frameCounter % settings.tickEvery === 0);
 
     if (doTick) {
-      regenPlants();
-
-      for (const g of grazers) grazerStep(g);
-      for (const h of hunters) hunterStep(h);
-
-      handleLife(grazers, ticks);
-      handleLife(hunters, ticks);
-
-      if (ticks % 25 === 0) updateSpeciesStats(ticks);
-
-      ticks++;
+      tickOnce(false);
+      followCamera();
 
       if (ticks % 25 === 0) {
-        const avg = (arr, key) =>
-          arr.length ? (arr.reduce((s, a) => s + a.g[key], 0) / arr.length).toFixed(2) : "—";
-        const sizeAvg = (arr) =>
-          arr.length ? (arr.reduce((s, a) => s + a.g.size, 0) / arr.length).toFixed(2) : "—";
+        const avg = (arr, key) => arr.length ? (arr.reduce((s,a)=>s+a.g[key],0)/arr.length).toFixed(2) : "—";
+        const sizeAvg = (arr) => arr.length ? (arr.reduce((s,a)=>s+a.g.size,0)/arr.length).toFixed(2) : "—";
 
-        const gTop = topSpeciesList("g", 4);
-        const hTop = topSpeciesList("h", 4);
-
+        const speciesCount = Array.from(speciesDB.values()).filter(s => s.count > 0).length;
         statsEl.textContent =
-`Grazers: ${grazers.length} | Hunters: ${hunters.length} | Species: ${speciesDB.size}
+`Grazers: ${grazers.length} | Hunters: ${hunters.length} | Living species: ${speciesCount}
 Avg size: grazers ${sizeAvg(grazers)} | hunters ${sizeAvg(hunters)}
-Avg genes (grazers): speed ${avg(grazers, "speed")} greed ${avg(grazers, "greed")} caution ${avg(grazers, "caution")}
-Avg genes (hunters): speed ${avg(hunters, "speed")} bite  ${avg(hunters, "bite")}
+Avg genes (grazers): speed ${avg(grazers,"speed")} greed ${avg(grazers,"greed")} caution ${avg(grazers,"caution")}
+Avg genes (hunters): speed ${avg(hunters,"speed")} bite  ${avg(hunters,"bite")}
 Pressure: ${densityPressure().toFixed(2)} | Plant growth: ${settings.plantGrowth.toFixed(3)} | Mutation: ${settings.mutRate.toFixed(2)} / ${settings.mutStrength.toFixed(2)} | Speciation: ${settings.speciesSplit.toFixed(2)}
-
-Top grazer species:
-${gTop.length ? gTop.map(fmtSpeciesLine).join("\n") : "—"}
-
-Top hunter species:
-${hTop.length ? hTop.map(fmtSpeciesLine).join("\n") : "—"}`;
+Following: ${followedSpeciesId ?? "—"}`;
       }
+    }
+
+    // periodic autosave
+    const now = Date.now();
+    if (autosaveEl.checked && now - lastSaveMs > SAVE_EVERY_MS) {
+      lastSaveMs = now;
+      saveWorld();
     }
   }
 
   draw();
   requestAnimationFrame(step);
 }
-requestAnimationFrame(step);
 
 // =======================
-// UI buttons
+// DRAW LOOP START
+// =======================
+function startSim() {
+  // attempt to load saved world
+  const loaded = loadWorld();
+  if (!loaded) {
+    resetSimFresh();
+    renderLegend();
+    resetView();
+  }
+  requestAnimationFrame(step);
+}
+startSim();
+
+// =======================
+// BUTTONS
 // =======================
 pauseBtn.addEventListener("click", () => {
   paused = !paused;
@@ -835,5 +1027,42 @@ resetBtn.addEventListener("click", () => {
   pauseBtn.textContent = "Pause";
   ticks = 0;
   frameCounter = 0;
-  resetSim();
+  resetSimFresh();
+  saveWorld();
 });
+
+clearSaveBtn.addEventListener("click", () => {
+  try { localStorage.removeItem(WORLD_KEY); } catch {}
+  ticks = 0;
+  frameCounter = 0;
+  resetSimFresh();
+});
+
+window.addEventListener("beforeunload", () => {
+  // save once right before closing
+  saveWorld();
+});
+
+// =======================
+// DRAW HELPERS
+// =======================
+function clearFrame() {
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  const w = W(), h = H();
+  if (!drawTrailsEl.checked) {
+    ctx.fillStyle = "#06090d";
+    ctx.fillRect(0, 0, w, h);
+  } else {
+    ctx.fillStyle = "rgba(6,9,13,0.14)";
+    ctx.fillRect(0, 0, w, h);
+  }
+  ctx.restore();
+}
+
+function applyCameraTransform() {
+  const cx = W() / 2, cy = H() / 2;
+  ctx.translate(cx, cy);
+  ctx.scale(cam.scale, cam.scale);
+  ctx.translate(-cam.x, -cam.y);
+}
