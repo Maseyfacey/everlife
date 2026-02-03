@@ -27,58 +27,60 @@
 
       <label class="chk">
         <input type="checkbox" id="showLabels" />
-        Species labels (only when zoomed in)
+        Labels (only when zoomed in)
       </label>
 
       <label class="chk">
         <input type="checkbox" id="autosave" checked />
         Autosave
       </label>
+    </div>
 
-      <button id="clearSaveBtn" class="danger">Clear Save</button>
+    <div class="row">
+      <div class="slotBox">
+        <span class="slotLabel">Save slot</span>
+        <select id="slotSelect">
+          <option value="1">World 1</option>
+          <option value="2">World 2</option>
+          <option value="3">World 3</option>
+        </select>
+      </div>
+
+      <button id="exportBtn">Export (.json)</button>
+      <label class="importBtn">
+        Import (.json)
+        <input id="importFile" type="file" accept="application/json" />
+      </label>
+
+      <button id="clearSlotBtn" class="danger">Clear Slot</button>
     </div>
 
     <div class="controls">
       <div class="ctl">
-        <div class="ctlTop">
-          <span>Sim speed</span>
-          <span class="val" id="v_tickEvery">2</span>
-        </div>
+        <div class="ctlTop"><span>Sim speed</span><span class="val" id="v_tickEvery">2</span></div>
         <input id="tickEvery" type="range" min="1" max="10" step="1" />
         <div class="hint">Higher = slower (1 tick every N frames)</div>
       </div>
 
       <div class="ctl">
-        <div class="ctlTop">
-          <span>Plant growth</span>
-          <span class="val" id="v_plantGrowth">0.006</span>
-        </div>
+        <div class="ctlTop"><span>Plant growth</span><span class="val" id="v_plantGrowth">0.006</span></div>
         <input id="plantGrowth" type="range" min="0.001" max="0.03" step="0.001" />
       </div>
 
       <div class="ctl">
-        <div class="ctlTop">
-          <span>Mutation rate</span>
-          <span class="val" id="v_mutRate">0.10</span>
-        </div>
+        <div class="ctlTop"><span>Mutation rate</span><span class="val" id="v_mutRate">0.10</span></div>
         <input id="mutRate" type="range" min="0.00" max="0.30" step="0.01" />
       </div>
 
       <div class="ctl">
-        <div class="ctlTop">
-          <span>Mutation strength</span>
-          <span class="val" id="v_mutStrength">0.10</span>
-        </div>
+        <div class="ctlTop"><span>Mutation strength</span><span class="val" id="v_mutStrength">0.10</span></div>
         <input id="mutStrength" type="range" min="0.00" max="0.30" step="0.01" />
       </div>
 
       <div class="ctl">
-        <div class="ctlTop">
-          <span>Speciation</span>
-          <span class="val" id="v_speciesSplit">0.30</span>
-        </div>
+        <div class="ctlTop"><span>Speciation</span><span class="val" id="v_speciesSplit">0.30</span></div>
         <input id="speciesSplit" type="range" min="0.15" max="0.60" step="0.01" />
-        <div class="hint">Lower = more new species</div>
+        <div class="hint">Lower = more species</div>
       </div>
     </div>
 
@@ -89,12 +91,11 @@
     <div class="wrap">
       <canvas id="c"></canvas>
 
-      <!-- LEGEND PANEL -->
-      <aside id="legend" class="legend">
+      <aside class="legend">
         <div class="legendTop">
           <div>
             <div class="legendTitle">Species</div>
-            <div class="legendSub">Click a species to follow it</div>
+            <div class="legendSub">Click to follow</div>
           </div>
           <button id="unfollowBtn" class="small">Unfollow</button>
         </div>
@@ -114,7 +115,7 @@
   </main>
 
   <footer>
-    Autosave stores the world in your browser and “fast-forwards” when you reopen.
+    Slot saves are stored in your browser. Export lets you share/save outside the browser.
   </footer>
 
   <script src="sim.js"></script>
