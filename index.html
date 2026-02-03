@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>2-Organism Ecosystem</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>2-Organism Ecosystem</h1>
+    <div class="row">
+      <button id="pauseBtn">Pause</button>
+      <button id="resetBtn">Reset</button>
+      <label class="chk">
+        <input type="checkbox" id="drawTrails" checked />
+        Trails
+      </label>
+      <label class="chk">
+        <input type="checkbox" id="drawHeat" />
+        Plant Heatmap
+      </label>
+    </div>
+    <div id="stats"></div>
+  </header>
+
+  <main>
+    <canvas id="c"></canvas>
+  </main>
+
+  <footer>
+    Tip: let it run 2–5 minutes. Then tweak constants in <code>sim.js</code> (mutation, plant growth, vision).
+  </footer>
+
+  <script src="sim.js"></script>
+</body>
+</html>
